@@ -1,0 +1,15 @@
+[Unit]
+Description=Dashboard Controller backlight service
+After=network.target
+After=redis.service
+Requires=redis.service
+
+[Service]
+Type=simple
+WorkingDirectory=/etc/librescoot
+ExecStart=/usr/bin/dbc-backlight
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
