@@ -1,4 +1,4 @@
-module dbc-backlight-service
+module github.com/librescoot/dbc-backlight-service
 
 go 1.22.2
 

@@ -6,9 +6,9 @@ import (
 	"log"
 	"time"
 
-	"dbc-backlight-service/internal/backlight"
-	"dbc-backlight-service/internal/config"
-	redisClient "dbc-backlight-service/internal/redis"
+	"github.com/librescoot/dbc-backlight-service/internal/backlight"
+	"github.com/librescoot/dbc-backlight-service/internal/config"
+	redisClient "github.com/librescoot/dbc-backlight-service/internal/redis"
 )
 
 type Service struct {

@@ -7,8 +7,8 @@ import (
 	"os/signal"
 	"syscall"
 
-	"dbc-backlight-service/internal/config"
-	"dbc-backlight-service/internal/service"
+	"github.com/librescoot/dbc-backlight-service/internal/config"
+	"github.com/librescoot/dbc-backlight-service/internal/service"
 )
 
 var version = "0.1.0" // Default version, can be overridden during build
