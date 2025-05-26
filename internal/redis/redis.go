@@ -41,12 +41,15 @@ func (c *Client) GetIlluminanceValue(ctx context.Context) (int, error) {
 		return 0, fmt.Errorf("failed to get illuminance value: %v", err)
 	}
 
-	value, err := strconv.Atoi(result)
+	floatValue, err := strconv.ParseFloat(result, 64)
 	if err != nil {
-		return 0, fmt.Errorf("invalid illuminance value: %v", err)
+		return 0, fmt.Errorf("invalid illuminance value (not a float): %v", err)
 	}
 
-	return value, nil
+	// Convert float to int (truncates decimal part)
+	intValue := int(floatValue)
+
+	return intValue, nil
 }
 
 func (c *Client) SetBacklightValue(ctx context.Context, value int) error {
