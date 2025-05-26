@@ -31,19 +31,19 @@ func (c *Client) Ping(ctx context.Context) error {
 	return c.client.Ping(ctx).Err()
 }
 
-func (c *Client) GetIlluminationValue(ctx context.Context) (int, error) {
-	result, err := c.client.HGet(ctx, "dashboard", "illumination").Result()
+func (c *Client) GetIlluminanceValue(ctx context.Context) (int, error) {
+	result, err := c.client.HGet(ctx, "dashboard", "brightness").Result()
 	if err != nil {
 		if err == redis.Nil {
-			c.logger.Printf("Illumination value not found in Redis")
+			c.logger.Printf("Illuminance value not found in Redis")
 			return 0, nil
 		}
-		return 0, fmt.Errorf("failed to get illumination value: %v", err)
+		return 0, fmt.Errorf("failed to get illuminance value: %v", err)
 	}
 
 	value, err := strconv.Atoi(result)
 	if err != nil {
-		return 0, fmt.Errorf("invalid illumination value: %v", err)
+		return 0, fmt.Errorf("invalid illuminance value: %v", err)
 	}
 
 	return value, nil

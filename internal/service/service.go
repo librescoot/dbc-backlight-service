@@ -50,18 +50,18 @@ func (s *Service) Run(ctx context.Context) error {
 	s.Logger.Printf("Using backlight path: %s", s.Config.SysBacklightPath)
 
 	// Start the main monitoring loop
-	go s.monitorIllumination(ctx)
+	go s.monitorIlluminance(ctx)
 
 	<-ctx.Done()
 	return nil
 }
 
-func (s *Service) monitorIllumination(ctx context.Context) {
+func (s *Service) monitorIlluminance(ctx context.Context) {
 	ticker := time.NewTicker(s.Config.PollingTime)
 	defer ticker.Stop()
 
 	// Initial reading and adjustment
-	if err := s.adjustBacklightBasedOnIllumination(ctx); err != nil {
+	if err := s.adjustBacklightBasedOnIlluminance(ctx); err != nil {
 		s.Logger.Printf("Initial backlight adjustment failed: %v", err)
 	}
 
@@ -70,22 +70,22 @@ func (s *Service) monitorIllumination(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if err := s.adjustBacklightBasedOnIllumination(ctx); err != nil {
+			if err := s.adjustBacklightBasedOnIlluminance(ctx); err != nil {
 				s.Logger.Printf("Periodic backlight adjustment failed: %v", err)
 			}
 		}
 	}
 }
 
-func (s *Service) adjustBacklightBasedOnIllumination(ctx context.Context) error {
-	// Get illumination value from Redis
-	illumination, err := s.Redis.GetIlluminationValue(ctx)
+func (s *Service) adjustBacklightBasedOnIlluminance(ctx context.Context) error {
+	// Get illuminance value from Redis
+	illuminance, err := s.Redis.GetIlluminanceValue(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to get illumination value: %v", err)
+		return fmt.Errorf("failed to get illuminance value: %v", err)
 	}
 
-	// Adjust backlight based on illumination
-	if err := s.Backlight.AdjustBacklight(illumination); err != nil {
+	// Adjust backlight based on illuminance
+	if err := s.Backlight.AdjustBacklight(illuminance); err != nil {
 		return fmt.Errorf("failed to adjust backlight: %v", err)
 	}
 

@@ -12,8 +12,8 @@ import (
 type BrightnessLevel struct {
 	Name            string
 	Value           int
-	MinIllumination int // Minimum illumination to stay at this level
-	MaxIllumination int // Maximum illumination to stay at this level
+	MinIlluminance int // Minimum illuminance to stay at this level
+	MaxIlluminance int // Maximum illuminance to stay at this level
 }
 
 type Manager struct {
@@ -29,12 +29,12 @@ func New(backlightPath string, logger *log.Logger) *Manager {
 		logger:        logger,
 		backlightPath: backlightPath,
 		levels: []BrightnessLevel{
-			{Name: "OFF", Value: 0x00, MinIllumination: 0, MaxIllumination: 5},
-			{Name: "VERY_LOW", Value: 0x800, MinIllumination: 5, MaxIllumination: 15},
-			{Name: "LOW", Value: 0x1000, MinIllumination: 15, MaxIllumination: 30},
-			{Name: "MEDIUM", Value: 0x2000, MinIllumination: 30, MaxIllumination: 45},
-			{Name: "HIGH", Value: 0x4000, MinIllumination: 45, MaxIllumination: 60},
-			{Name: "MAX", Value: 0xffff, MinIllumination: 60, MaxIllumination: 999999},
+			{Name: "OFF", Value: 0x00, MinIlluminance: 0, MaxIlluminance: 50},
+			{Name: "VERY_LOW", Value: 0x800, MinIlluminance: 50, MaxIlluminance: 200},
+			{Name: "LOW", Value: 0x1000, MinIlluminance: 200, MaxIlluminance: 1000},
+			{Name: "MEDIUM", Value: 0x2000, MinIlluminance: 1000, MaxIlluminance: 5000},
+			{Name: "HIGH", Value: 0x4000, MinIlluminance: 5000, MaxIlluminance: 10000},
+			{Name: "MAX", Value: 0xffff, MinIlluminance: 10000, MaxIlluminance: 999999}, // MaxIlluminance can be kept very high
 		},
 		currentLevel: "MAX", // Default starting level (matches default-brightness-level in device tree)
 	}
@@ -81,9 +81,9 @@ func (m *Manager) SetLevel(levelName string) error {
 	return fmt.Errorf("unknown brightness level: %s", levelName)
 }
 
-// AdjustBacklight determines the appropriate backlight level based on illumination
-func (m *Manager) AdjustBacklight(illumination int) error {
-	m.logger.Printf("Current illumination value: %d", illumination)
+// AdjustBacklight determines the appropriate backlight level based on illuminance
+func (m *Manager) AdjustBacklight(illuminance int) error {
+	m.logger.Printf("Current illuminance value: %d", illuminance)
 	
 	// Find current level index
 	currentIndex := -1
@@ -103,50 +103,50 @@ func (m *Manager) AdjustBacklight(illumination int) error {
 	// Check if we need to change level
 	currentLevel := m.levels[currentIndex]
 	
-	// If illumination is below min threshold for current level, go down a level
-	if illumination < currentLevel.MinIllumination && currentIndex > 0 {
+	// If illuminance is below min threshold for current level, go down a level
+	if illuminance < currentLevel.MinIlluminance && currentIndex > 0 {
 		nextLevel := m.levels[currentIndex-1]
-		m.logger.Printf("Decreasing brightness from %s to %s (illumination %d < min %d)", 
-			currentLevel.Name, nextLevel.Name, illumination, currentLevel.MinIllumination)
+		m.logger.Printf("Decreasing brightness from %s to %s (illuminance %d < min %d)", 
+			currentLevel.Name, nextLevel.Name, illuminance, currentLevel.MinIlluminance)
 		return m.SetLevel(nextLevel.Name)
 	}
 	
-	// If illumination is above max threshold for current level, go up a level
-	if illumination > currentLevel.MaxIllumination && currentIndex < len(m.levels)-1 {
+	// If illuminance is above max threshold for current level, go up a level
+	if illuminance > currentLevel.MaxIlluminance && currentIndex < len(m.levels)-1 {
 		nextLevel := m.levels[currentIndex+1]
-		m.logger.Printf("Increasing brightness from %s to %s (illumination %d > max %d)", 
-			currentLevel.Name, nextLevel.Name, illumination, currentLevel.MaxIllumination)
+		m.logger.Printf("Increasing brightness from %s to %s (illuminance %d > max %d)", 
+			currentLevel.Name, nextLevel.Name, illuminance, currentLevel.MaxIlluminance)
 		return m.SetLevel(nextLevel.Name)
 	}
 	
-	m.logger.Printf("Staying at %s level (illumination %d within range %d-%d)", 
-		currentLevel.Name, illumination, currentLevel.MinIllumination, currentLevel.MaxIllumination)
+	m.logger.Printf("Staying at %s level (illuminance %d within range %d-%d)", 
+		currentLevel.Name, illuminance, currentLevel.MinIlluminance, currentLevel.MaxIlluminance)
 	
 	return nil
 }
 
-// FindAppropriateLevel finds the best level for a given illumination value
+// FindAppropriateLevel finds the best level for a given illuminance value
 // Useful for initial setting
-func (m *Manager) FindAppropriateLevel(illumination int) (string, error) {
+func (m *Manager) FindAppropriateLevel(illuminance int) (string, error) {
 	for i, level := range m.levels {
-		if illumination >= level.MinIllumination && illumination <= level.MaxIllumination {
+		if illuminance >= level.MinIlluminance && illuminance <= level.MaxIlluminance {
 			return level.Name, nil
 		}
 		
-		// Edge case for illumination below lowest level
-		if i == 0 && illumination < level.MinIllumination {
+		// Edge case for illuminance below lowest level
+		if i == 0 && illuminance < level.MinIlluminance {
 			return level.Name, nil
 		}
 		
-		// Edge case for illumination above highest level
-		if i == len(m.levels)-1 && illumination > level.MaxIllumination {
+		// Edge case for illuminance above highest level
+		if i == len(m.levels)-1 && illuminance > level.MaxIlluminance {
 			return level.Name, nil
 		}
 	}
 	
 	// Default to middle level if something went wrong
 	middleLevel := m.levels[len(m.levels)/2].Name
-	m.logger.Printf("Could not find appropriate level for illumination %d, defaulting to %s", 
-		illumination, middleLevel)
+	m.logger.Printf("Could not find appropriate level for illuminance %d, defaulting to %s", 
+		illuminance, middleLevel)
 	return middleLevel, nil
 }
