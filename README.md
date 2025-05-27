@@ -34,21 +34,30 @@ The service supports the following configuration flags:
 - `--redis-url`: Redis URL (default: "redis://192.168.7.1:6379")
 - `--polling-time`: Polling interval for illuminance value (default: 1s)
 - `--backlight-path`: Path to backlight brightness file (default: "/sys/class/backlight/backlight/brightness")
+- `--base-illuminance`: Base illuminance threshold (lux) for the brightness formula (default: 15.0).
+- `--base-brightness`: Brightness value set when illuminance is at or below `--base-illuminance` (default: 8192).
+- `--lux-multiplier`: The factor by which illuminance must increase (beyond `--base-illuminance`) for the brightness to step up. This acts as the base of the logarithm in the brightness formula (default: 3.0).
+- `--brightness-increment`: The amount of brightness added for each step defined by the `--lux-multiplier` (default: 1024).
 
-## Brightness Levels
+## Brightness Adjustment Formula
 
-The service uses the device tree's brightness levels that are defined as:
+The service dynamically adjusts backlight brightness based on a mathematical formula controlled by the configuration flags mentioned above. This provides a continuous and configurable brightness curve.
 
-| Level Name | Brightness Value | Illuminance Range (lux) |
-|------------|------------------|-------------------------|
-| OFF        | 0x00             | 0-50                    |
-| VERY_LOW   | 0x800            | 50-200                  |
-| LOW        | 0x1000           | 200-1000                |
-| MEDIUM     | 0x2000           | 1000-5000               |
-| HIGH       | 0x4000           | 5000-10000              |
-| MAX        | 0xffff           | 10000+                  |
+The formula is as follows:
 
-The service dynamically adjusts the backlight level based on the current illuminance value from Redis. It transitions between levels when the illuminance crosses the defined thresholds.
+1.  **If current illuminance <= `--base-illuminance`**:
+    *   `Target Brightness = --base-brightness`
+
+2.  **If current illuminance > `--base-illuminance`**:
+    *   Let `I_current` be the current illuminance.
+    *   Let `I_base` be `--base-illuminance`.
+    *   Let `B_base` be `--base-brightness`.
+    *   Let `M_lux` be `--lux-multiplier`.
+    *   Let `B_inc` be `--brightness-increment`.
+    *   The number of "steps" (`n`) is calculated as: `n = log_M_lux(I_current / I_base)`
+    *   `Target Brightness = B_base + n * B_inc`
+
+The calculated `Target Brightness` is rounded to the nearest integer and capped at a maximum hardware value of 65535. It is also ensured that if illuminance is above `--base-illuminance`, the target brightness will not be less than `--base-brightness`.
 
 ## Redis Keys
 

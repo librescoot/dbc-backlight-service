@@ -9,42 +9,31 @@ import (
 	"strings"
 )
 
-// BrightnessLevel defines a brightness level with its value and threshold ranges
-type BrightnessLevel struct {
-	Name            string
-	Value           int
-	MinIlluminance int // Minimum illuminance to stay at this level
-	MaxIlluminance int // Maximum illuminance to stay at this level
-}
-
 type Manager struct {
-	logger        *log.Logger
-	backlightPath string
-	levels        []BrightnessLevel
-	currentLevel  string
+	logger                   *log.Logger
+	backlightPath            string
+	baseIlluminanceThreshold float64
+	baseBrightness           int
+	luxMultiplier            float64
+	brightnessIncrement      int
 }
 
-func New(backlightPath string, logger *log.Logger) *Manager {
-	// Using device tree brightness levels: 0x00, 0x800, 0x1000, 0x2000, 0x4000, 0xffff
+func New(
+	backlightPath string,
+	logger *log.Logger,
+	baseIlluminance float64,
+	baseBrightness int,
+	luxMultiplier float64,
+	brightnessIncrement int,
+) *Manager {
 	return &Manager{
-		logger:        logger,
-		backlightPath: backlightPath,
-		levels: []BrightnessLevel{
-			{Name: "OFF", Value: 0x00, MinIlluminance: 0, MaxIlluminance: 50},
-			{Name: "VERY_LOW", Value: 0x800, MinIlluminance: 50, MaxIlluminance: 200},
-			{Name: "LOW", Value: 0x1000, MinIlluminance: 200, MaxIlluminance: 1000},
-			{Name: "MEDIUM", Value: 0x2000, MinIlluminance: 1000, MaxIlluminance: 5000},
-			{Name: "HIGH", Value: 0x4000, MinIlluminance: 5000, MaxIlluminance: 10000},
-			{Name: "MAX", Value: 0xffff, MinIlluminance: 10000, MaxIlluminance: 99999999}, // MaxIlluminance can be kept very high
-		},
-		currentLevel: "MAX", // Default starting level (matches default-brightness-level in device tree)
+		logger:                   logger,
+		backlightPath:            backlightPath,
+		baseIlluminanceThreshold: baseIlluminance,
+		baseBrightness:           baseBrightness,
+		luxMultiplier:            luxMultiplier,
+		brightnessIncrement:      brightnessIncrement,
 	}
-}
-
-// ConfigureLevels allows customizing the brightness levels
-func (m *Manager) ConfigureLevels(levels []BrightnessLevel) {
-	m.levels = levels
-	m.logger.Printf("Configured %d brightness levels", len(levels))
 }
 
 func (m *Manager) SetBrightness(value int) error {
@@ -71,120 +60,45 @@ func (m *Manager) GetCurrentBrightness() (int, error) {
 	return value, nil
 }
 
-func (m *Manager) SetLevel(levelName string) error {
-	for _, level := range m.levels {
-		if level.Name == levelName {
-			m.logger.Printf("Setting backlight to %s level: %d", level.Name, level.Value)
-			m.currentLevel = level.Name
-			return m.SetBrightness(level.Value)
-		}
-	}
-	return fmt.Errorf("unknown brightness level: %s", levelName)
-}
-
-// AdjustBacklight determines and sets an appropriate interpolated backlight level based on illuminance.
+// AdjustBacklight calculates and sets the backlight brightness based on a mathematical curve.
+// Minimum backlight is 8192 up to 15 lux.
+// Above 15 lux, brightness increases by 2048 for every 3x increase in lux.
 func (m *Manager) AdjustBacklight(illuminance int) error {
 	m.logger.Printf("AdjustBacklight called. Current illuminance sensor value: %d", illuminance)
 
-	if len(m.levels) == 0 {
-		return fmt.Errorf("no brightness levels configured")
-	}
+	const maxBrightness = 65535
 
-	// Handle edge case: illuminance below the first level's minimum
-	if illuminance <= m.levels[0].MinIlluminance {
-		targetBrightness := m.levels[0].Value
-		m.logger.Printf("Illuminance %d <= min threshold %d of first level %s. Setting brightness to %d",
-			illuminance, m.levels[0].MinIlluminance, m.levels[0].Name, targetBrightness)
-		m.currentLevel = m.levels[0].Name
-		return m.SetBrightness(targetBrightness)
-	}
+	var targetBrightness int
 
-	// Handle edge case: illuminance above or at the last level's maximum (or min if it's a single point)
-	// For the last level, we typically don't interpolate "beyond" it, just set to its value.
-	lastLevelIdx := len(m.levels) - 1
-	if illuminance >= m.levels[lastLevelIdx].MaxIlluminance {
-		targetBrightness := m.levels[lastLevelIdx].Value
-		m.logger.Printf("Illuminance %d >= max threshold %d of last level %s. Setting brightness to %d",
-			illuminance, m.levels[lastLevelIdx].MaxIlluminance, m.levels[lastLevelIdx].Name, targetBrightness)
-		m.currentLevel = m.levels[lastLevelIdx].Name
-		return m.SetBrightness(targetBrightness)
-	}
-	
-	// Find the segment for interpolation
-	for i := 0; i < len(m.levels); i++ {
-		currentSegmentDef := m.levels[i]
+	currentIlluminanceFloat := float64(illuminance)
 
-		if illuminance >= currentSegmentDef.MinIlluminance && illuminance <= currentSegmentDef.MaxIlluminance {
-			// Illuminance falls within this segment [MinIlluminance, MaxIlluminance]
-			// Interpolate between Value of previous level (or current if i=0) and Value of current level.
-			xCurrIllum := float64(illuminance)
-			x0SegmentIllumStart := float64(currentSegmentDef.MinIlluminance)
-			x1SegmentIllumEnd := float64(currentSegmentDef.MaxIlluminance)
-			
-			y1BrightnessAtSegmentEnd := float64(currentSegmentDef.Value)
-			y0BrightnessAtSegmentStart := 0.0
+	if currentIlluminanceFloat <= m.baseIlluminanceThreshold {
+		targetBrightness = m.baseBrightness
+		m.logger.Printf("Illuminance %d <= %.1f lux. Setting brightness to base value: %d",
+			illuminance, m.baseIlluminanceThreshold, targetBrightness)
+	} else {
+		// Calculate n_continuous = log_base_luxMultiplier(illuminance / baseIlluminanceThreshold)
+		// This n_continuous value represents how many "luxMultiplier factors" the current illuminance is above the base threshold.
+		n_continuous := math.Log(currentIlluminanceFloat/m.baseIlluminanceThreshold) / math.Log(m.luxMultiplier)
 
-			if i == 0 {
-				// For the first segment, interpolate from its own value to its own value if it's a flat range,
-				// or from a conceptual zero if MinIlluminance > 0 (not our case here).
-				// Given our levels start at MinIlluminance=0, Value=0, this is fine.
-				y0BrightnessAtSegmentStart = float64(m.levels[0].Value)
-			} else {
-				y0BrightnessAtSegmentStart = float64(m.levels[i-1].Value)
-			}
+		// Brightness = baseBrightness + n_continuous * brightnessIncrement
+		calculatedBrightnessFloat := float64(m.baseBrightness) + n_continuous*float64(m.brightnessIncrement)
 
-			var targetBrightness int
-			if x1SegmentIllumEnd == x0SegmentIllumStart { // Avoid division by zero if segment has zero width
-				targetBrightness = int(math.Round(y1BrightnessAtSegmentEnd))
-			} else {
-				factor := (xCurrIllum - x0SegmentIllumStart) / (x1SegmentIllumEnd - x0SegmentIllumStart)
-				interpolatedBrightness := y0BrightnessAtSegmentStart + factor*(y1BrightnessAtSegmentEnd-y0BrightnessAtSegmentStart)
-				targetBrightness = int(math.Round(interpolatedBrightness))
-			}
-			
-			m.logger.Printf("Illuminance %d in segment %s ([%d,%d] illum). Interpolating: prev_val=%.0f, curr_val=%.0f. Calculated brightness: %d",
-				illuminance, currentSegmentDef.Name, currentSegmentDef.MinIlluminance, currentSegmentDef.MaxIlluminance,
-				y0BrightnessAtSegmentStart, y1BrightnessAtSegmentEnd, targetBrightness)
+		targetBrightness = int(math.Round(calculatedBrightnessFloat))
 
-			m.currentLevel = currentSegmentDef.Name // Update currentLevel to the name of the segment we are in
-			return m.SetBrightness(targetBrightness)
+		// Cap at maxBrightness
+		if targetBrightness > maxBrightness {
+			targetBrightness = maxBrightness
 		}
+
+		// Ensure that for illuminance > baseIlluminanceThreshold, the brightness is at least baseBrightness.
+		if targetBrightness < m.baseBrightness {
+			targetBrightness = m.baseBrightness
+		}
+
+		m.logger.Printf("Illuminance %d > %.1f lux. Calculated n_continuous: %.4f. Target brightness: %d (capped at %d)",
+			illuminance, m.baseIlluminanceThreshold, n_continuous, targetBrightness, maxBrightness)
 	}
 
-	// Fallback: Should ideally not be reached if levels are configured contiguously
-	// and edge cases are handled. This implies illuminance is outside all defined Min/Max ranges.
-	// This could happen if illuminance is between m.levels[lastIdx].MaxIlluminance and the top edge case,
-	// which means it's higher than any defined MaxIlluminance but not high enough for the >= lastLevel.MaxIlluminance.
-	// This indicates a gap in level definitions or an issue with the logic.
-	// For safety, set to the last level's value.
-	m.logger.Printf("Warning: Illuminance %d did not fall into any defined segment after edge checks. Defaulting to last level %s (%d). Review level configuration.",
-		illuminance, m.levels[lastLevelIdx].Name, m.levels[lastLevelIdx].Value)
-	m.currentLevel = m.levels[lastLevelIdx].Name
-	return m.SetBrightness(m.levels[lastLevelIdx].Value)
-}
-
-// FindAppropriateLevel finds the best level for a given illuminance value
-// Useful for initial setting
-func (m *Manager) FindAppropriateLevel(illuminance int) (string, error) {
-	for i, level := range m.levels {
-		if illuminance >= level.MinIlluminance && illuminance <= level.MaxIlluminance {
-			return level.Name, nil
-		}
-		
-		// Edge case for illuminance below lowest level
-		if i == 0 && illuminance < level.MinIlluminance {
-			return level.Name, nil
-		}
-		
-		// Edge case for illuminance above highest level
-		if i == len(m.levels)-1 && illuminance > level.MaxIlluminance {
-			return level.Name, nil
-		}
-	}
-	
-	// Default to middle level if something went wrong
-	middleLevel := m.levels[len(m.levels)/2].Name
-	m.logger.Printf("Could not find appropriate level for illuminance %d, defaulting to %s", 
-		illuminance, middleLevel)
-	return middleLevel, nil
+	return m.SetBrightness(targetBrightness)
 }

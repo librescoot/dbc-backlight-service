@@ -25,7 +25,14 @@ func New(cfg *config.Config, logger *log.Logger, version string) (*Service, erro
 		return nil, fmt.Errorf("failed to create Redis client: %v", err)
 	}
 
-	backlightManager := backlight.New(cfg.SysBacklightPath, logger)
+	backlightManager := backlight.New(
+		cfg.SysBacklightPath,
+		logger,
+		cfg.FormulaBaseIlluminance,
+		cfg.FormulaBaseBrightness,
+		cfg.FormulaLuxMultiplier,
+		cfg.FormulaBrightnessIncrement,
+	)
 
 	service := &Service{
 		Config:     cfg,
