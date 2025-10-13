@@ -13,6 +13,7 @@ type Config struct {
 	FormulaBaseBrightness      int
 	FormulaLuxMultiplier       float64
 	FormulaBrightnessIncrement int
+	HysteresisThreshold        int
 }
 
 func New() *Config {
@@ -27,6 +28,7 @@ func New() *Config {
 	flag.IntVar(&cfg.FormulaBaseBrightness, "base-brightness", 8192, "Base brightness value for the formula")
 	flag.Float64Var(&cfg.FormulaLuxMultiplier, "lux-multiplier", 3.0, "Lux multiplier (log base) for the formula")
 	flag.IntVar(&cfg.FormulaBrightnessIncrement, "brightness-increment", 2048, "Brightness increment step for the formula")
+	flag.IntVar(&cfg.HysteresisThreshold, "hysteresis-threshold", 512, "Minimum brightness change required to trigger Redis update (prevents jitter)")
 
 	return cfg
 }

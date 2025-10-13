@@ -12,11 +12,12 @@ import (
 )
 
 type Service struct {
-	Config     *config.Config
-	Redis      *redisClient.Client
-	Logger     *log.Logger
-	Backlight  *backlight.Manager
-	lastUpdate time.Time
+	Config                  *config.Config
+	Redis                   *redisClient.Client
+	Logger                  *log.Logger
+	Backlight               *backlight.Manager
+	lastUpdate              time.Time
+	lastPublishedBrightness int
 }
 
 func New(cfg *config.Config, logger *log.Logger, version string) (*Service, error) {
@@ -35,11 +36,12 @@ func New(cfg *config.Config, logger *log.Logger, version string) (*Service, erro
 	)
 
 	service := &Service{
-		Config:     cfg,
-		Redis:      redis,
-		Logger:     logger,
-		Backlight:  backlightManager,
-		lastUpdate: time.Now(),
+		Config:                  cfg,
+		Redis:                   redis,
+		Logger:                  logger,
+		Backlight:               backlightManager,
+		lastUpdate:              time.Now(),
+		lastPublishedBrightness: -1, // Initialize to -1 to ensure first reading triggers update
 	}
 
 	service.Logger.Printf("dbc-backlight-service v%s", version)
@@ -100,13 +102,27 @@ func (s *Service) adjustBacklightBasedOnIlluminance(ctx context.Context) error {
 	brightness, err := s.Backlight.GetCurrentBrightness()
 	if err != nil {
 		s.Logger.Printf("Warning: Failed to read current brightness: %v", err)
-		// Don't return error here, we can continue without reading the current value
-	} else {
+		return nil
+	}
+
+	// Apply hysteresis: only update Redis if brightness changed significantly
+	brightnessChange := brightness - s.lastPublishedBrightness
+	if brightnessChange < 0 {
+		brightnessChange = -brightnessChange
+	}
+
+	if brightnessChange >= s.Config.HysteresisThreshold || s.lastPublishedBrightness == -1 {
 		// Write backlight value to Redis
 		if err := s.Redis.SetBacklightValue(ctx, brightness); err != nil {
 			s.Logger.Printf("Warning: Failed to write backlight value to Redis: %v", err)
-			// Don't return error here, we can continue without writing to Redis
+		} else {
+			s.Logger.Printf("Brightness changed from %d to %d (delta: %d, threshold: %d) - updating Redis",
+				s.lastPublishedBrightness, brightness, brightnessChange, s.Config.HysteresisThreshold)
+			s.lastPublishedBrightness = brightness
 		}
+	} else {
+		s.Logger.Printf("Brightness change %d below threshold %d - skipping Redis update (current: %d, last published: %d)",
+			brightnessChange, s.Config.HysteresisThreshold, brightness, s.lastPublishedBrightness)
 	}
 
 	return nil
