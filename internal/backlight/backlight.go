@@ -3,36 +3,103 @@ package backlight
 import (
 	"fmt"
 	"log"
-	"math"
 	"os"
 	"strconv"
 	"strings"
 )
 
+// BrightnessLevel represents the current brightness state
+type BrightnessLevel int
+
+const (
+	LevelVeryLow BrightnessLevel = iota
+	LevelLow
+	LevelMid
+	LevelHigh
+	LevelVeryHigh
+)
+
+func (l BrightnessLevel) String() string {
+	switch l {
+	case LevelVeryLow:
+		return "VERY_LOW"
+	case LevelLow:
+		return "LOW"
+	case LevelMid:
+		return "MID"
+	case LevelHigh:
+		return "HIGH"
+	case LevelVeryHigh:
+		return "VERY_HIGH"
+	default:
+		return "UNKNOWN"
+	}
+}
+
+// StateConfig defines brightness value and transition thresholds for each state
+type StateConfig struct {
+	Brightness    int
+	ThresholdUp   int // lux value to transition to next higher state
+	ThresholdDown int // lux value to transition to next lower state
+}
+
 type Manager struct {
-	logger                   *log.Logger
-	backlightPath            string
-	baseIlluminanceThreshold float64
-	baseBrightness           int
-	luxMultiplier            float64
-	brightnessIncrement      int
+	logger        *log.Logger
+	backlightPath string
+	currentLevel  BrightnessLevel
+	states        map[BrightnessLevel]StateConfig
 }
 
 func New(
 	backlightPath string,
 	logger *log.Logger,
-	baseIlluminance float64,
-	baseBrightness int,
-	luxMultiplier float64,
-	brightnessIncrement int,
+	veryLowBrightness int,
+	lowBrightness int,
+	midBrightness int,
+	highBrightness int,
+	veryHighBrightness int,
+	veryLowToLowThreshold int,
+	lowToMidThreshold int,
+	midToHighThreshold int,
+	highToVeryHighThreshold int,
+	lowToVeryLowThreshold int,
+	midToLowThreshold int,
+	highToMidThreshold int,
+	veryHighToHighThreshold int,
 ) *Manager {
+	states := map[BrightnessLevel]StateConfig{
+		LevelVeryLow: {
+			Brightness:    veryLowBrightness,
+			ThresholdUp:   veryLowToLowThreshold,
+			ThresholdDown: 0, // No lower state
+		},
+		LevelLow: {
+			Brightness:    lowBrightness,
+			ThresholdUp:   lowToMidThreshold,
+			ThresholdDown: lowToVeryLowThreshold,
+		},
+		LevelMid: {
+			Brightness:    midBrightness,
+			ThresholdUp:   midToHighThreshold,
+			ThresholdDown: midToLowThreshold,
+		},
+		LevelHigh: {
+			Brightness:    highBrightness,
+			ThresholdUp:   highToVeryHighThreshold,
+			ThresholdDown: highToMidThreshold,
+		},
+		LevelVeryHigh: {
+			Brightness:    veryHighBrightness,
+			ThresholdUp:   0, // No higher state
+			ThresholdDown: veryHighToHighThreshold,
+		},
+	}
+
 	return &Manager{
-		logger:                   logger,
-		backlightPath:            backlightPath,
-		baseIlluminanceThreshold: baseIlluminance,
-		baseBrightness:           baseBrightness,
-		luxMultiplier:            luxMultiplier,
-		brightnessIncrement:      brightnessIncrement,
+		logger:        logger,
+		backlightPath: backlightPath,
+		currentLevel:  LevelMid, // Start at medium level
+		states:        states,
 	}
 }
 
@@ -60,81 +127,83 @@ func (m *Manager) GetCurrentBrightness() (int, error) {
 	return value, nil
 }
 
-// AdjustBacklight calculates and sets the backlight brightness based on a mathematical curve.
-// Minimum backlight is 8192 up to 15 lux.
-// Above 15 lux, brightness increases by 2048 for every 3x increase in lux.
-// The calculated brightness is then mapped to the device's usable range (9400-10240).
+// AdjustBacklight adjusts the backlight brightness using a discrete state machine
+// with hysteresis to prevent rapid oscillation between brightness levels.
 func (m *Manager) AdjustBacklight(illuminance int) error {
-	m.logger.Printf("AdjustBacklight called. Current illuminance sensor value: %d", illuminance)
+	m.logger.Printf("AdjustBacklight called. Current illuminance: %d lux, current state: %s",
+		illuminance, m.currentLevel)
 
-	const maxBrightness = 65535
-	const deviceMinUsable = 9350
-	const deviceMaxUsable = 10240
+	previousLevel := m.currentLevel
+	currentState := m.states[m.currentLevel]
 
-	var calculatedBrightness int
-
-	currentIlluminanceFloat := float64(illuminance)
-
-	if currentIlluminanceFloat <= m.baseIlluminanceThreshold {
-		calculatedBrightness = m.baseBrightness
-		m.logger.Printf("Illuminance %d <= %.1f lux. Setting brightness to base value: %d",
-			illuminance, m.baseIlluminanceThreshold, calculatedBrightness)
-	} else {
-		// Calculate n_continuous = log_base_luxMultiplier(illuminance / baseIlluminanceThreshold)
-		// This n_continuous value represents how many "luxMultiplier factors" the current illuminance is above the base threshold.
-		n_continuous := math.Log(currentIlluminanceFloat/m.baseIlluminanceThreshold) / math.Log(m.luxMultiplier)
-
-		// Brightness = baseBrightness + n_continuous * brightnessIncrement
-		calculatedBrightnessFloat := float64(m.baseBrightness) + n_continuous*float64(m.brightnessIncrement)
-
-		calculatedBrightness = int(math.Round(calculatedBrightnessFloat))
-
-		// Cap at maxBrightness
-		if calculatedBrightness > maxBrightness {
-			calculatedBrightness = maxBrightness
+	// Check for state transitions based on hysteresis thresholds
+	switch m.currentLevel {
+	case LevelVeryLow:
+		if currentState.ThresholdUp > 0 && illuminance > currentState.ThresholdUp {
+			m.currentLevel = LevelLow
+			m.logger.Printf("Transitioning VERY_LOW → LOW (illuminance %d > %d)",
+				illuminance, currentState.ThresholdUp)
 		}
 
-		// Ensure that for illuminance > baseIlluminanceThreshold, the brightness is at least baseBrightness.
-		if calculatedBrightness < m.baseBrightness {
-			calculatedBrightness = m.baseBrightness
+	case LevelLow:
+		if currentState.ThresholdUp > 0 && illuminance > currentState.ThresholdUp {
+			m.currentLevel = LevelMid
+			m.logger.Printf("Transitioning LOW → MID (illuminance %d > %d)",
+				illuminance, currentState.ThresholdUp)
+		} else if currentState.ThresholdDown > 0 && illuminance < currentState.ThresholdDown {
+			m.currentLevel = LevelVeryLow
+			m.logger.Printf("Transitioning LOW → VERY_LOW (illuminance %d < %d)",
+				illuminance, currentState.ThresholdDown)
 		}
 
-		m.logger.Printf("Illuminance %d > %.1f lux. Calculated n_continuous: %.4f. Calculated brightness: %d (capped at %d)",
-			illuminance, m.baseIlluminanceThreshold, n_continuous, calculatedBrightness, maxBrightness)
-	}
+	case LevelMid:
+		if currentState.ThresholdUp > 0 && illuminance > currentState.ThresholdUp {
+			m.currentLevel = LevelHigh
+			m.logger.Printf("Transitioning MID → HIGH (illuminance %d > %d)",
+				illuminance, currentState.ThresholdUp)
+		} else if currentState.ThresholdDown > 0 && illuminance < currentState.ThresholdDown {
+			m.currentLevel = LevelLow
+			m.logger.Printf("Transitioning MID → LOW (illuminance %d < %d)",
+				illuminance, currentState.ThresholdDown)
+		}
 
-	// Map to device's usable range with aggressive curve for sunlight
-	// Low light: 9400-9800 (small range for darkness)
-	// Sunlight: 9900+ (ramp up quickly when illuminance increases)
-	var targetBrightness int
-	
-	if currentIlluminanceFloat <= m.baseIlluminanceThreshold {
-		targetBrightness = deviceMinUsable
-	} else {
-		// Calculate how far above base illuminance we are
-		illuminanceRatio := currentIlluminanceFloat / m.baseIlluminanceThreshold
-		
-		if illuminanceRatio <= 2.0 {
-			// Transition zone: 9600-9900 over 2x illuminance increase
-			transitionProgress := (illuminanceRatio - 1.0) / 1.0 // 0 to 1 as ratio goes from 1 to 2
-			targetBrightness = 9600 + int(transitionProgress*300) // 9600 to 9900
-		} else {
-			// Sunlight zone: 9900-10240, ramp up quickly
-			sunlightProgress := math.Min((illuminanceRatio-2.0)/8.0, 1.0) // Normalize over next 8x increase
-			targetBrightness = 9900 + int(sunlightProgress*float64(deviceMaxUsable-9900))
+	case LevelHigh:
+		if currentState.ThresholdUp > 0 && illuminance > currentState.ThresholdUp {
+			m.currentLevel = LevelVeryHigh
+			m.logger.Printf("Transitioning HIGH → VERY_HIGH (illuminance %d > %d)",
+				illuminance, currentState.ThresholdUp)
+		} else if currentState.ThresholdDown > 0 && illuminance < currentState.ThresholdDown {
+			m.currentLevel = LevelMid
+			m.logger.Printf("Transitioning HIGH → MID (illuminance %d < %d)",
+				illuminance, currentState.ThresholdDown)
+		}
+
+	case LevelVeryHigh:
+		if currentState.ThresholdDown > 0 && illuminance < currentState.ThresholdDown {
+			m.currentLevel = LevelHigh
+			m.logger.Printf("Transitioning VERY_HIGH → HIGH (illuminance %d < %d)",
+				illuminance, currentState.ThresholdDown)
 		}
 	}
 
-	// Ensure we stay within device bounds
-	if targetBrightness < deviceMinUsable {
-		targetBrightness = deviceMinUsable
-	}
-	if targetBrightness > deviceMaxUsable {
-		targetBrightness = deviceMaxUsable
+	// Set brightness if state changed
+	newState := m.states[m.currentLevel]
+	if m.currentLevel != previousLevel {
+		m.logger.Printf("State changed: %s → %s, setting brightness to %d",
+			previousLevel, m.currentLevel, newState.Brightness)
+		return m.SetBrightness(newState.Brightness)
 	}
 
-	m.logger.Printf("Mapped illuminance %.1f lux to device brightness %d (range %d-%d)",
-		currentIlluminanceFloat, targetBrightness, deviceMinUsable, deviceMaxUsable)
+	m.logger.Printf("Staying in state %s (brightness %d)", m.currentLevel, newState.Brightness)
+	return nil
+}
 
-	return m.SetBrightness(targetBrightness)
+// GetCurrentLevel returns the current brightness level state (useful for testing)
+func (m *Manager) GetCurrentLevel() BrightnessLevel {
+	return m.currentLevel
+}
+
+// SetCurrentLevel sets the current brightness level state (useful for testing)
+func (m *Manager) SetCurrentLevel(level BrightnessLevel) {
+	m.currentLevel = level
 }

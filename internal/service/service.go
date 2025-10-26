@@ -29,10 +29,19 @@ func New(cfg *config.Config, logger *log.Logger, version string) (*Service, erro
 	backlightManager := backlight.New(
 		cfg.SysBacklightPath,
 		logger,
-		cfg.FormulaBaseIlluminance,
-		cfg.FormulaBaseBrightness,
-		cfg.FormulaLuxMultiplier,
-		cfg.FormulaBrightnessIncrement,
+		cfg.VeryLowBrightness,
+		cfg.LowBrightness,
+		cfg.MidBrightness,
+		cfg.HighBrightness,
+		cfg.VeryHighBrightness,
+		cfg.VeryLowToLowThreshold,
+		cfg.LowToMidThreshold,
+		cfg.MidToHighThreshold,
+		cfg.HighToVeryHighThreshold,
+		cfg.LowToVeryLowThreshold,
+		cfg.MidToLowThreshold,
+		cfg.HighToMidThreshold,
+		cfg.VeryHighToHighThreshold,
 	)
 
 	service := &Service{

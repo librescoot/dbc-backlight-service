@@ -5,10 +5,9 @@ A Go-based service that adjusts the backlight of the Dashboard Controller based 
 ## Features
 
 - Dynamically adjusts backlight brightness based on ambient light readings
-- Uses device tree brightness levels: 0x00, 0x800, 0x1000, 0x2000, 0x4000, 0xffff
-- Configurable illuminance thresholds for brightness level transitions
-- Multiple brightness levels with intelligent transitions
-- Persists backlight state to Redis
+- 5-level discrete state machine with hysteresis to prevent oscillation
+- Fully configurable brightness values and transition thresholds
+- Reads illuminance from Redis and publishes backlight state back to Redis
 - Systemd integration
 
 ## Building
@@ -31,33 +30,76 @@ make clean
 
 The service supports the following configuration flags:
 
+### Basic Configuration
 - `--redis-url`: Redis URL (default: "redis://192.168.7.1:6379")
 - `--polling-time`: Polling interval for illuminance value (default: 1s)
 - `--backlight-path`: Path to backlight brightness file (default: "/sys/class/backlight/backlight/brightness")
-- `--base-illuminance`: Base illuminance threshold (lux) for the brightness formula (default: 15.0).
-- `--base-brightness`: Brightness value set when illuminance is at or below `--base-illuminance` (default: 8192).
-- `--lux-multiplier`: The factor by which illuminance must increase (beyond `--base-illuminance`) for the brightness to step up. This acts as the base of the logarithm in the brightness formula (default: 3.0).
-- `--brightness-increment`: The amount of brightness added for each step defined by the `--lux-multiplier` (default: 1024).
+- `--hysteresis-threshold`: Minimum brightness change to trigger Redis update (default: 512)
 
-## Brightness Adjustment Formula
+### Brightness Levels
+- `--very-low-brightness`: Brightness for VERY_LOW state (default: 9350)
+- `--low-brightness`: Brightness for LOW state (default: 9500)
+- `--mid-brightness`: Brightness for MID state (default: 9700)
+- `--high-brightness`: Brightness for HIGH state (default: 9950)
+- `--very-high-brightness`: Brightness for VERY_HIGH state (default: 10240)
 
-The service dynamically adjusts backlight brightness based on a mathematical formula controlled by the configuration flags mentioned above. This provides a continuous and configurable brightness curve.
+### Upward Transition Thresholds (lux)
+- `--very-low-to-low-threshold`: Transition VERY_LOW → LOW (default: 8)
+- `--low-to-mid-threshold`: Transition LOW → MID (default: 18)
+- `--mid-to-high-threshold`: Transition MID → HIGH (default: 40)
+- `--high-to-very-high-threshold`: Transition HIGH → VERY_HIGH (default: 80)
 
-The formula is as follows:
+### Downward Transition Thresholds (lux)
+- `--low-to-very-low-threshold`: Transition LOW → VERY_LOW (default: 5)
+- `--mid-to-low-threshold`: Transition MID → LOW (default: 15)
+- `--high-to-mid-threshold`: Transition HIGH → MID (default: 35)
+- `--very-high-to-high-threshold`: Transition VERY_HIGH → HIGH (default: 70)
 
-1.  **If current illuminance <= `--base-illuminance`**:
-    *   `Target Brightness = --base-brightness`
+## Brightness State Machine
 
-2.  **If current illuminance > `--base-illuminance`**:
-    *   Let `I_current` be the current illuminance.
-    *   Let `I_base` be `--base-illuminance`.
-    *   Let `B_base` be `--base-brightness`.
-    *   Let `M_lux` be `--lux-multiplier`.
-    *   Let `B_inc` be `--brightness-increment`.
-    *   The number of "steps" (`n`) is calculated as: `n = log_M_lux(I_current / I_base)`
-    *   `Target Brightness = B_base + n * B_inc`
+The service uses a discrete 5-state state machine with hysteresis to adjust backlight brightness smoothly while preventing rapid oscillation.
 
-The calculated `Target Brightness` is rounded to the nearest integer and capped at a maximum hardware value of 65535. It is also ensured that if illuminance is above `--base-illuminance`, the target brightness will not be less than `--base-brightness`.
+### States and Brightness Levels
+
+| State | Default Brightness | Use Case |
+|-------|-------------------|----------|
+| VERY_LOW | 9350 | Dark room, night |
+| LOW | 9500 | Dim indoor, evening |
+| MID | 9700 | Normal indoor, cloudy day |
+| HIGH | 9950 | Outdoor shade, indirect sun |
+| VERY_HIGH | 10240 | Direct sunlight |
+
+### State Transitions
+
+The state machine includes hysteresis gaps between upward and downward thresholds to prevent rapid state changes:
+
+```
+VERY_LOW (9350)
+  ↑ when lux > 8
+
+LOW (9500)
+  ↑ when lux > 18
+  ↓ when lux < 5
+
+MID (9700)
+  ↑ when lux > 40
+  ↓ when lux < 15
+
+HIGH (9950)
+  ↑ when lux > 80
+  ↓ when lux < 35
+
+VERY_HIGH (10240)
+  ↓ when lux < 70
+```
+
+**Hysteresis gaps** (prevents oscillation):
+- VERY_LOW ↔ LOW: 5-8 lux (3 lux gap)
+- LOW ↔ MID: 15-18 lux (3 lux gap)
+- MID ↔ HIGH: 35-40 lux (5 lux gap)
+- HIGH ↔ VERY_HIGH: 70-80 lux (10 lux gap)
+
+The service starts in the MID state on boot.
 
 ## Redis Keys
 
