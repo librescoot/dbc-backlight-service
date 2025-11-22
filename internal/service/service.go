@@ -125,13 +125,10 @@ func (s *Service) adjustBacklightBasedOnIlluminance(ctx context.Context) error {
 		if err := s.Redis.SetBacklightValue(ctx, brightness); err != nil {
 			s.Logger.Printf("Warning: Failed to write backlight value to Redis: %v", err)
 		} else {
-			s.Logger.Printf("Brightness changed from %d to %d (delta: %d, threshold: %d) - updating Redis",
-				s.lastPublishedBrightness, brightness, brightnessChange, s.Config.HysteresisThreshold)
+			s.Logger.Printf("Brightness changed from %d to %d (delta: %d) - updating Redis",
+				s.lastPublishedBrightness, brightness, brightnessChange)
 			s.lastPublishedBrightness = brightness
 		}
-	} else {
-		s.Logger.Printf("Brightness change %d below threshold %d - skipping Redis update (current: %d, last published: %d)",
-			brightnessChange, s.Config.HysteresisThreshold, brightness, s.lastPublishedBrightness)
 	}
 
 	return nil

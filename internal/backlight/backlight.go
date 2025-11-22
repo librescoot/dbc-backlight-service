@@ -130,8 +130,6 @@ func (m *Manager) GetCurrentBrightness() (int, error) {
 // AdjustBacklight adjusts the backlight brightness using a discrete state machine
 // with hysteresis to prevent rapid oscillation between brightness levels.
 func (m *Manager) AdjustBacklight(illuminance int) error {
-	m.logger.Printf("AdjustBacklight called. Current illuminance: %d lux, current state: %s",
-		illuminance, m.currentLevel)
 
 	previousLevel := m.currentLevel
 	currentState := m.states[m.currentLevel]
@@ -194,7 +192,6 @@ func (m *Manager) AdjustBacklight(illuminance int) error {
 		return m.SetBrightness(newState.Brightness)
 	}
 
-	m.logger.Printf("Staying in state %s (brightness %d)", m.currentLevel, newState.Brightness)
 	return nil
 }
 
