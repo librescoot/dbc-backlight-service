@@ -1,4 +1,5 @@
 BINARY_NAME := dbc-backlight
+BUILD_DIR := bin
 GIT_REV := $(shell git describe --tags --always 2>/dev/null)
 ifdef GIT_REV
 LDFLAGS := -X main.version=$(GIT_REV)
@@ -8,32 +9,22 @@ endif
 BUILDFLAGS := -tags netgo,osusergo
 MAIN := ./cmd/backlight-service
 
-.PHONY: build build-host build-amd64 build-arm amd64 arm clean lint test fmt deps
+.PHONY: build build-host build-arm dist clean lint test fmt deps
 
-dev: build
-build: build-host
+build:
+	mkdir -p $(BUILD_DIR)
+	GOOS=linux GOARCH=arm GOARM=7 CGO_ENABLED=0 go build -ldflags "$(LDFLAGS) -s -w" $(BUILDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME) $(MAIN)
+
+build-arm: build
 
 build-host:
-	go build -ldflags "$(LDFLAGS)" -o ${BINARY_NAME} ${MAIN}
+	mkdir -p $(BUILD_DIR)
+	go build -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME) $(MAIN)
 
-build-amd64: amd64
-
-build-arm: arm
-
-amd64:
-	GOOS=linux GOARCH=amd64 go build -ldflags "$(LDFLAGS)" $(BUILDFLAGS) -o ${BINARY_NAME}-amd64 ${MAIN}
-
-arm:
-	GOOS=linux GOARCH=arm GOARM=7 go build -ldflags "$(LDFLAGS)" $(BUILDFLAGS) -o ${BINARY_NAME}-arm ${MAIN}
-
-dist:
-	GOOS=linux GOARCH=arm GOARM=7 CGO_ENABLED=0 go build -ldflags "$(LDFLAGS) -s -w" $(BUILDFLAGS) -o ${BINARY_NAME}-arm-dist ${MAIN}
-
-arm-debug:
-	GOOS=linux GOARCH=arm GOARM=7 CGO_ENABLED=0 go build -ldflags "$(LDFLAGS)" -gcflags="all=-N -l" $(BUILDFLAGS) -o ${BINARY_NAME}-arm-debug ${MAIN}
+dist: build
 
 clean:
-	rm -f ${BINARY_NAME} ${BINARY_NAME}-amd64 ${BINARY_NAME}-arm ${BINARY_NAME}-arm-dist ${BINARY_NAME}-arm-debug
+	rm -rf $(BUILD_DIR)
 
 lint:
 	golangci-lint run
