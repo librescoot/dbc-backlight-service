@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"flag"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
@@ -11,9 +13,17 @@ import (
 	"github.com/librescoot/dbc-backlight-service/internal/service"
 )
 
-var version = "0.1.0" // Default version, can be overridden during build
+var version = "dev" // Default version, can be overridden during build
 
 func main() {
+	showVersion := flag.Bool("version", false, "Print version and exit")
+	flag.Parse()
+
+	if *showVersion {
+		fmt.Printf("dbc-backlight %s\n", version)
+		return
+	}
+
 	// Create logger
 	var logger *log.Logger
 	if os.Getenv("INVOCATION_ID") != "" {
