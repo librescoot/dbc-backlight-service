@@ -26,7 +26,7 @@ func main() {
 
 	// Create logger
 	var logger *log.Logger
-	if os.Getenv("INVOCATION_ID") != "" {
+	if os.Getenv("JOURNAL_STREAM") != "" {
 		logger = log.New(os.Stdout, "", 0)
 	} else {
 		logger = log.New(os.Stdout, "dbc-backlight: ", log.LstdFlags|log.Lmsgprefix)
