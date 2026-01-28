@@ -99,12 +99,13 @@ VERY_HIGH (10240)
 - MID ↔ HIGH: 35-40 lux (5 lux gap)
 - HIGH ↔ VERY_HIGH: 70-80 lux (10 lux gap)
 
-The service starts in the MID state on boot.
+The service reads the current hardware brightness at startup to determine its
+initial state. If the backlight file cannot be read, it defaults to MID.
 
 ## Redis Keys
 
-- **Read**: `HGET dashboard brightness` - Gets the current illuminance value
-- **Write**: `HSET dashboard backlight <value>` - Sets the current backlight value
+- **Read**: `HGET dashboard brightness` - Ambient light sensor reading (lux) from dbc-illumination-service
+- **Write**: `HSET dashboard backlight <value>` - Current backlight brightness value set by this service
 
 ## Installation
 
