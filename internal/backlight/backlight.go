@@ -95,12 +95,40 @@ func New(
 		},
 	}
 
-	return &Manager{
+	m := &Manager{
 		logger:        logger,
 		backlightPath: backlightPath,
-		currentLevel:  LevelMid, // Start at medium level
+		currentLevel:  LevelMid,
 		states:        states,
 	}
+
+	// Read actual hardware brightness to determine initial state
+	if brightness, err := m.GetCurrentBrightness(); err == nil {
+		m.currentLevel = m.closestLevel(brightness)
+		m.logger.Printf("Initialized from hardware brightness %d → state %s", brightness, m.currentLevel)
+	} else {
+		m.logger.Printf("Could not read hardware brightness, defaulting to %s: %v", m.currentLevel, err)
+	}
+
+	return m
+}
+
+// closestLevel returns the brightness level whose configured brightness value
+// is closest to the given hardware brightness reading.
+func (m *Manager) closestLevel(brightness int) BrightnessLevel {
+	best := LevelMid
+	bestDiff := -1
+	for level, cfg := range m.states {
+		diff := brightness - cfg.Brightness
+		if diff < 0 {
+			diff = -diff
+		}
+		if bestDiff < 0 || diff < bestDiff {
+			best = level
+			bestDiff = diff
+		}
+	}
+	return best
 }
 
 func (m *Manager) SetBrightness(value int) error {
