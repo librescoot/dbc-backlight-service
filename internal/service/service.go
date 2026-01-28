@@ -80,18 +80,22 @@ func (s *Service) monitorIlluminance(ctx context.Context) {
 	defer ticker.Stop()
 
 	// Initial reading and adjustment
-	if err := s.adjustBacklightBasedOnIlluminance(ctx); err != nil {
+	initCtx, initCancel := context.WithTimeout(ctx, 5*time.Second)
+	if err := s.adjustBacklightBasedOnIlluminance(initCtx); err != nil {
 		s.Logger.Printf("Initial backlight adjustment failed: %v", err)
 	}
+	initCancel()
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if err := s.adjustBacklightBasedOnIlluminance(ctx); err != nil {
+			adjustCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			if err := s.adjustBacklightBasedOnIlluminance(adjustCtx); err != nil {
 				s.Logger.Printf("Periodic backlight adjustment failed: %v", err)
 			}
+			cancel()
 		}
 	}
 }
