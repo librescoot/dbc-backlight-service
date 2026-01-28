@@ -59,7 +59,8 @@ func New(cfg *config.Config, logger *log.Logger, version string) (*Service, erro
 }
 
 func (s *Service) Run(ctx context.Context) error {
-	// Check Redis connection
+	defer s.Redis.Close()
+
 	if err := s.Redis.Ping(ctx); err != nil {
 		return fmt.Errorf("redis connection failed: %v", err)
 	}
