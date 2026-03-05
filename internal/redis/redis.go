@@ -31,7 +31,7 @@ func (c *Client) Ping(ctx context.Context) error {
 	return c.client.Ping(ctx).Err()
 }
 
-func (c *Client) GetIlluminanceValue(ctx context.Context) (int, error) {
+func (c *Client) GetIlluminanceValue(ctx context.Context) (float64, error) {
 	result, err := c.client.HGet(ctx, "dashboard", "brightness").Result()
 	if err != nil {
 		if err == redis.Nil {
@@ -41,15 +41,12 @@ func (c *Client) GetIlluminanceValue(ctx context.Context) (int, error) {
 		return 0, fmt.Errorf("failed to get illuminance value: %v", err)
 	}
 
-	floatValue, err := strconv.ParseFloat(result, 64)
+	lux, err := strconv.ParseFloat(result, 64)
 	if err != nil {
-		return 0, fmt.Errorf("invalid illuminance value (not a float): %v", err)
+		return 0, fmt.Errorf("invalid illuminance value: %v", err)
 	}
 
-	// Convert float to int (truncates decimal part)
-	intValue := int(floatValue)
-
-	return intValue, nil
+	return lux, nil
 }
 
 func (c *Client) SetBacklightValue(ctx context.Context, value int) error {

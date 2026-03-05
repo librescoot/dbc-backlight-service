@@ -3,232 +3,137 @@ package backlight
 import (
 	"fmt"
 	"log"
+	"math"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 )
 
-// BrightnessLevel represents the current brightness state
-type BrightnessLevel int
-
-const (
-	LevelVeryLow BrightnessLevel = iota
-	LevelLow
-	LevelMid
-	LevelHigh
-	LevelVeryHigh
-)
-
-func (l BrightnessLevel) String() string {
-	switch l {
-	case LevelVeryLow:
-		return "VERY_LOW"
-	case LevelLow:
-		return "LOW"
-	case LevelMid:
-		return "MID"
-	case LevelHigh:
-		return "HIGH"
-	case LevelVeryHigh:
-		return "VERY_HIGH"
-	default:
-		return "UNKNOWN"
-	}
+// Point represents a lux→brightness mapping on the interpolation curve.
+type Point struct {
+	Lux        float64
+	Brightness int
 }
 
-// StateConfig defines brightness value and transition thresholds for each state
-type StateConfig struct {
-	Brightness    int
-	ThresholdUp   int // lux value to transition to next higher state
-	ThresholdDown int // lux value to transition to next lower state
+// ParseCurve parses a curve string of "lux:brightness" pairs.
+// Example: "0.5:100 2:400 5:1200 35:10240"
+func ParseCurve(s string) ([]Point, error) {
+	fields := strings.Fields(s)
+	if len(fields) < 2 {
+		return nil, fmt.Errorf("curve needs at least 2 points, got %d", len(fields))
+	}
+
+	points := make([]Point, 0, len(fields))
+	for _, f := range fields {
+		parts := strings.SplitN(f, ":", 2)
+		if len(parts) != 2 {
+			return nil, fmt.Errorf("invalid point %q (expected lux:brightness)", f)
+		}
+		lux, err := strconv.ParseFloat(parts[0], 64)
+		if err != nil {
+			return nil, fmt.Errorf("invalid lux value %q: %v", parts[0], err)
+		}
+		brightness, err := strconv.Atoi(parts[1])
+		if err != nil {
+			return nil, fmt.Errorf("invalid brightness value %q: %v", parts[1], err)
+		}
+		points = append(points, Point{Lux: lux, Brightness: brightness})
+	}
+
+	sort.Slice(points, func(i, j int) bool {
+		return points[i].Lux < points[j].Lux
+	})
+
+	return points, nil
 }
 
 type Manager struct {
 	logger        *log.Logger
 	backlightPath string
-	currentLevel  BrightnessLevel
-	states        map[BrightnessLevel]StateConfig
+	curve         []Point
+	current       int // last written brightness value
+	minDelta      int // minimum change to trigger a write
 }
 
-func New(
-	backlightPath string,
-	logger *log.Logger,
-	veryLowBrightness int,
-	lowBrightness int,
-	midBrightness int,
-	highBrightness int,
-	veryHighBrightness int,
-	veryLowToLowThreshold int,
-	lowToMidThreshold int,
-	midToHighThreshold int,
-	highToVeryHighThreshold int,
-	lowToVeryLowThreshold int,
-	midToLowThreshold int,
-	highToMidThreshold int,
-	veryHighToHighThreshold int,
-) *Manager {
-	states := map[BrightnessLevel]StateConfig{
-		LevelVeryLow: {
-			Brightness:    veryLowBrightness,
-			ThresholdUp:   veryLowToLowThreshold,
-			ThresholdDown: 0, // No lower state
-		},
-		LevelLow: {
-			Brightness:    lowBrightness,
-			ThresholdUp:   lowToMidThreshold,
-			ThresholdDown: lowToVeryLowThreshold,
-		},
-		LevelMid: {
-			Brightness:    midBrightness,
-			ThresholdUp:   midToHighThreshold,
-			ThresholdDown: midToLowThreshold,
-		},
-		LevelHigh: {
-			Brightness:    highBrightness,
-			ThresholdUp:   highToVeryHighThreshold,
-			ThresholdDown: highToMidThreshold,
-		},
-		LevelVeryHigh: {
-			Brightness:    veryHighBrightness,
-			ThresholdUp:   0, // No higher state
-			ThresholdDown: veryHighToHighThreshold,
-		},
-	}
-
+func New(backlightPath string, logger *log.Logger, curve []Point, minDelta int) *Manager {
 	m := &Manager{
 		logger:        logger,
 		backlightPath: backlightPath,
-		currentLevel:  LevelMid,
-		states:        states,
+		curve:         curve,
+		current:       -1,
+		minDelta:      minDelta,
 	}
 
-	// Read actual hardware brightness to determine initial state
-	if brightness, err := m.GetCurrentBrightness(); err == nil {
-		m.currentLevel = m.closestLevel(brightness)
-		m.logger.Printf("Initialized from hardware brightness %d → state %s", brightness, m.currentLevel)
+	if brightness, err := m.readBrightness(); err == nil {
+		m.current = brightness
+		m.logger.Printf("Initialized from hardware brightness %d", brightness)
 	} else {
-		m.logger.Printf("Could not read hardware brightness, defaulting to %s: %v", m.currentLevel, err)
+		m.logger.Printf("Could not read hardware brightness: %v", err)
 	}
 
 	return m
 }
 
-// closestLevel returns the brightness level whose configured brightness value
-// is closest to the given hardware brightness reading.
-func (m *Manager) closestLevel(brightness int) BrightnessLevel {
-	best := LevelMid
-	bestDiff := -1
-	for level, cfg := range m.states {
-		diff := brightness - cfg.Brightness
-		if diff < 0 {
-			diff = -diff
-		}
-		if bestDiff < 0 || diff < bestDiff {
-			best = level
-			bestDiff = diff
+// Interpolate returns the brightness for a given lux value by linearly
+// interpolating between the two surrounding curve points.
+func (m *Manager) Interpolate(lux float64) int {
+	if lux <= m.curve[0].Lux {
+		return m.curve[0].Brightness
+	}
+	last := m.curve[len(m.curve)-1]
+	if lux >= last.Lux {
+		return last.Brightness
+	}
+
+	for i := 1; i < len(m.curve); i++ {
+		if lux <= m.curve[i].Lux {
+			p0 := m.curve[i-1]
+			p1 := m.curve[i]
+			t := (lux - p0.Lux) / (p1.Lux - p0.Lux)
+			b := float64(p0.Brightness) + t*float64(p1.Brightness-p0.Brightness)
+			return int(math.Round(b))
 		}
 	}
-	return best
+
+	return last.Brightness
 }
 
-func (m *Manager) SetBrightness(value int) error {
-	// Write to the backlight file
-	err := os.WriteFile(m.backlightPath, []byte(strconv.Itoa(value)), 0644)
-	if err != nil {
-		return fmt.Errorf("failed to write to backlight file: %v", err)
+// AdjustBacklight computes the target brightness for the given lux value
+// and writes it to the backlight sysfs file if the change exceeds minDelta.
+func (m *Manager) AdjustBacklight(lux float64) error {
+	target := m.Interpolate(lux)
+
+	delta := target - m.current
+	if delta < 0 {
+		delta = -delta
 	}
-	return nil
+
+	if m.current >= 0 && delta < m.minDelta {
+		return nil
+	}
+
+	m.logger.Printf("lux=%.1f → brightness %d (was %d)", lux, target, m.current)
+	m.current = target
+	return m.writeBrightness(target)
 }
 
 func (m *Manager) GetCurrentBrightness() (int, error) {
-	// Read the current brightness value
+	return m.readBrightness()
+}
+
+func (m *Manager) readBrightness() (int, error) {
 	data, err := os.ReadFile(m.backlightPath)
 	if err != nil {
 		return 0, fmt.Errorf("failed to read backlight file: %v", err)
 	}
-
 	value, err := strconv.Atoi(strings.TrimSpace(string(data)))
 	if err != nil {
 		return 0, fmt.Errorf("invalid brightness value: %v", err)
 	}
-
 	return value, nil
 }
 
-// AdjustBacklight adjusts the backlight brightness using a discrete state machine
-// with hysteresis to prevent rapid oscillation between brightness levels.
-func (m *Manager) AdjustBacklight(illuminance int) error {
-
-	previousLevel := m.currentLevel
-	currentState := m.states[m.currentLevel]
-
-	// Check for state transitions based on hysteresis thresholds
-	switch m.currentLevel {
-	case LevelVeryLow:
-		if currentState.ThresholdUp > 0 && illuminance > currentState.ThresholdUp {
-			m.currentLevel = LevelLow
-			m.logger.Printf("Transitioning VERY_LOW → LOW (illuminance %d > %d)",
-				illuminance, currentState.ThresholdUp)
-		}
-
-	case LevelLow:
-		if currentState.ThresholdUp > 0 && illuminance > currentState.ThresholdUp {
-			m.currentLevel = LevelMid
-			m.logger.Printf("Transitioning LOW → MID (illuminance %d > %d)",
-				illuminance, currentState.ThresholdUp)
-		} else if currentState.ThresholdDown > 0 && illuminance < currentState.ThresholdDown {
-			m.currentLevel = LevelVeryLow
-			m.logger.Printf("Transitioning LOW → VERY_LOW (illuminance %d < %d)",
-				illuminance, currentState.ThresholdDown)
-		}
-
-	case LevelMid:
-		if currentState.ThresholdUp > 0 && illuminance > currentState.ThresholdUp {
-			m.currentLevel = LevelHigh
-			m.logger.Printf("Transitioning MID → HIGH (illuminance %d > %d)",
-				illuminance, currentState.ThresholdUp)
-		} else if currentState.ThresholdDown > 0 && illuminance < currentState.ThresholdDown {
-			m.currentLevel = LevelLow
-			m.logger.Printf("Transitioning MID → LOW (illuminance %d < %d)",
-				illuminance, currentState.ThresholdDown)
-		}
-
-	case LevelHigh:
-		if currentState.ThresholdUp > 0 && illuminance > currentState.ThresholdUp {
-			m.currentLevel = LevelVeryHigh
-			m.logger.Printf("Transitioning HIGH → VERY_HIGH (illuminance %d > %d)",
-				illuminance, currentState.ThresholdUp)
-		} else if currentState.ThresholdDown > 0 && illuminance < currentState.ThresholdDown {
-			m.currentLevel = LevelMid
-			m.logger.Printf("Transitioning HIGH → MID (illuminance %d < %d)",
-				illuminance, currentState.ThresholdDown)
-		}
-
-	case LevelVeryHigh:
-		if currentState.ThresholdDown > 0 && illuminance < currentState.ThresholdDown {
-			m.currentLevel = LevelHigh
-			m.logger.Printf("Transitioning VERY_HIGH → HIGH (illuminance %d < %d)",
-				illuminance, currentState.ThresholdDown)
-		}
-	}
-
-	// Set brightness if state changed
-	newState := m.states[m.currentLevel]
-	if m.currentLevel != previousLevel {
-		m.logger.Printf("State changed: %s → %s, setting brightness to %d",
-			previousLevel, m.currentLevel, newState.Brightness)
-		return m.SetBrightness(newState.Brightness)
-	}
-
-	return nil
-}
-
-// GetCurrentLevel returns the current brightness level state (useful for testing)
-func (m *Manager) GetCurrentLevel() BrightnessLevel {
-	return m.currentLevel
-}
-
-// SetCurrentLevel sets the current brightness level state (useful for testing)
-func (m *Manager) SetCurrentLevel(level BrightnessLevel) {
-	m.currentLevel = level
+func (m *Manager) writeBrightness(value int) error {
+	return os.WriteFile(m.backlightPath, []byte(strconv.Itoa(value)), 0644)
 }

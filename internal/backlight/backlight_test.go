@@ -8,253 +8,132 @@ import (
 	"testing"
 )
 
-// newTestManager creates a Manager with default thresholds pointing at a temp file.
-// Uses the same defaults as config.go.
+var defaultCurve = []Point{
+	{0.5, 100},
+	{2, 500},
+	{5, 1500},
+	{15, 4000},
+	{35, 7000},
+	{80, 10240},
+}
+
 func newTestManager(t *testing.T) *Manager {
 	t.Helper()
 	tmp := t.TempDir() + "/brightness"
-	os.WriteFile(tmp, []byte("5500"), 0644) // MID brightness
-
+	os.WriteFile(tmp, []byte("5000"), 0644)
 	logger := log.New(os.Stderr, "test: ", 0)
-	return New(
-		tmp, logger,
-		1000,  // veryLow
-		3000,  // low
-		5500,  // mid
-		8000,  // high
-		10240, // veryHigh
-		8,     // veryLow→low
-		18,    // low→mid
-		40,    // mid→high
-		80,    // high→veryHigh
-		5,     // low→veryLow
-		15,    // mid→low
-		35,    // high→mid
-		70,    // veryHigh→high
-	)
+	return New(tmp, logger, defaultCurve, 50)
 }
 
-func TestInitialStateFromHardware(t *testing.T) {
-	tests := []struct {
-		name       string
-		brightness int
-		want       BrightnessLevel
-	}{
-		{"very low brightness", 1000, LevelVeryLow},
-		{"low brightness", 3000, LevelLow},
-		{"mid brightness", 5500, LevelMid},
-		{"high brightness", 8000, LevelHigh},
-		{"very high brightness", 10240, LevelVeryHigh},
-		{"between low and mid", 4000, LevelLow},
-		{"between mid and high", 6500, LevelMid},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			tmp := t.TempDir() + "/brightness"
-			os.WriteFile(tmp, []byte(strconv.Itoa(tt.brightness)), 0644)
-
-			logger := log.New(os.Stderr, "test: ", 0)
-			m := New(tmp, logger,
-				1000, 3000, 5500, 8000, 10240,
-				8, 18, 40, 80,
-				5, 15, 35, 70,
-			)
-
-			if m.GetCurrentLevel() != tt.want {
-				t.Errorf("got %s, want %s", m.GetCurrentLevel(), tt.want)
-			}
-		})
-	}
-}
-
-func TestInitialStateFallback(t *testing.T) {
-	logger := log.New(os.Stderr, "test: ", 0)
-	m := New("/nonexistent/path", logger,
-		1000, 3000, 5500, 8000, 10240,
-		8, 18, 40, 80,
-		5, 15, 35, 70,
-	)
-
-	if m.GetCurrentLevel() != LevelMid {
-		t.Errorf("expected MID fallback, got %s", m.GetCurrentLevel())
-	}
-}
-
-func TestUpwardTransitions(t *testing.T) {
-	tests := []struct {
-		name       string
-		start      BrightnessLevel
-		illuminance int
-		want       BrightnessLevel
-	}{
-		{"veryLow to low", LevelVeryLow, 9, LevelLow},
-		{"low to mid", LevelLow, 19, LevelMid},
-		{"mid to high", LevelMid, 41, LevelHigh},
-		{"high to veryHigh", LevelHigh, 81, LevelVeryHigh},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			m := newTestManager(t)
-			m.SetCurrentLevel(tt.start)
-			if err := m.AdjustBacklight(tt.illuminance); err != nil {
-				t.Fatal(err)
-			}
-			if m.GetCurrentLevel() != tt.want {
-				t.Errorf("got %s, want %s", m.GetCurrentLevel(), tt.want)
-			}
-		})
-	}
-}
-
-func TestDownwardTransitions(t *testing.T) {
-	tests := []struct {
-		name       string
-		start      BrightnessLevel
-		illuminance int
-		want       BrightnessLevel
-	}{
-		{"low to veryLow", LevelLow, 4, LevelVeryLow},
-		{"mid to low", LevelMid, 14, LevelLow},
-		{"high to mid", LevelHigh, 34, LevelMid},
-		{"veryHigh to high", LevelVeryHigh, 69, LevelHigh},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			m := newTestManager(t)
-			m.SetCurrentLevel(tt.start)
-			if err := m.AdjustBacklight(tt.illuminance); err != nil {
-				t.Fatal(err)
-			}
-			if m.GetCurrentLevel() != tt.want {
-				t.Errorf("got %s, want %s", m.GetCurrentLevel(), tt.want)
-			}
-		})
-	}
-}
-
-func TestHysteresisNoTransition(t *testing.T) {
-	tests := []struct {
-		name        string
-		start       BrightnessLevel
-		illuminance int
-	}{
-		{"mid stays at exact up threshold", LevelMid, 40},
-		{"mid stays at exact down threshold", LevelMid, 15},
-		{"mid stays in dead zone", LevelMid, 25},
-		{"low stays between thresholds", LevelLow, 10},
-		{"high stays between thresholds", LevelHigh, 50},
-		{"veryLow stays below up threshold", LevelVeryLow, 8},
-		{"veryHigh stays above down threshold", LevelVeryHigh, 70},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			m := newTestManager(t)
-			m.SetCurrentLevel(tt.start)
-			if err := m.AdjustBacklight(tt.illuminance); err != nil {
-				t.Fatal(err)
-			}
-			if m.GetCurrentLevel() != tt.start {
-				t.Errorf("expected no transition from %s, got %s", tt.start, m.GetCurrentLevel())
-			}
-		})
-	}
-}
-
-func TestNoFileWriteWithoutTransition(t *testing.T) {
-	m := newTestManager(t)
-	m.SetCurrentLevel(LevelMid)
-
-	// Write a known value to the file
-	os.WriteFile(m.backlightPath, []byte("12345"), 0644)
-
-	// Adjust with value in dead zone — should not write
-	if err := m.AdjustBacklight(25); err != nil {
+func TestParseCurve(t *testing.T) {
+	curve, err := ParseCurve("0.5:100 2:500 5:1500 35:10240")
+	if err != nil {
 		t.Fatal(err)
 	}
-
-	data, _ := os.ReadFile(m.backlightPath)
-	if strings.TrimSpace(string(data)) != "12345" {
-		t.Errorf("file was written when no transition occurred: got %q", string(data))
+	if len(curve) != 4 {
+		t.Fatalf("expected 4 points, got %d", len(curve))
+	}
+	if curve[0].Lux != 0.5 || curve[0].Brightness != 100 {
+		t.Errorf("first point: got %v", curve[0])
+	}
+	if curve[3].Lux != 35 || curve[3].Brightness != 10240 {
+		t.Errorf("last point: got %v", curve[3])
 	}
 }
 
-func TestFileWriteOnTransition(t *testing.T) {
-	m := newTestManager(t)
-	m.SetCurrentLevel(LevelMid)
+func TestParseCurveSorts(t *testing.T) {
+	curve, err := ParseCurve("35:10240 0.5:100 5:1500")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if curve[0].Lux != 0.5 || curve[2].Lux != 35 {
+		t.Errorf("curve not sorted: %v", curve)
+	}
+}
 
-	if err := m.AdjustBacklight(41); err != nil {
+func TestParseCurveErrors(t *testing.T) {
+	tests := []string{
+		"",
+		"1:100",
+		"bad:100 2:200",
+		"1:bad 2:200",
+		"nocolon 2:200",
+	}
+	for _, s := range tests {
+		if _, err := ParseCurve(s); err == nil {
+			t.Errorf("expected error for %q", s)
+		}
+	}
+}
+
+func TestInterpolateBelowMin(t *testing.T) {
+	m := newTestManager(t)
+	if b := m.Interpolate(0); b != 100 {
+		t.Errorf("below min: got %d, want 100", b)
+	}
+}
+
+func TestInterpolateAboveMax(t *testing.T) {
+	m := newTestManager(t)
+	if b := m.Interpolate(200); b != 10240 {
+		t.Errorf("above max: got %d, want 10240", b)
+	}
+}
+
+func TestInterpolateExactPoints(t *testing.T) {
+	m := newTestManager(t)
+	for _, p := range defaultCurve {
+		if b := m.Interpolate(p.Lux); b != p.Brightness {
+			t.Errorf("at lux=%.1f: got %d, want %d", p.Lux, b, p.Brightness)
+		}
+	}
+}
+
+func TestInterpolateMidpoints(t *testing.T) {
+	m := newTestManager(t)
+
+	// Midpoint between 0.5:100 and 2:500 → lux=1.25 → brightness=300
+	b := m.Interpolate(1.25)
+	if b != 300 {
+		t.Errorf("midpoint 0.5-2: got %d, want 300", b)
+	}
+
+	// Midpoint between 35:7000 and 80:10240 → lux=57.5 → brightness=8620
+	b = m.Interpolate(57.5)
+	if b != 8620 {
+		t.Errorf("midpoint 35-80: got %d, want 8620", b)
+	}
+}
+
+func TestAdjustWritesOnChange(t *testing.T) {
+	m := newTestManager(t)
+	m.current = 100
+
+	if err := m.AdjustBacklight(35); err != nil {
 		t.Fatal(err)
 	}
 
 	data, _ := os.ReadFile(m.backlightPath)
 	val, _ := strconv.Atoi(strings.TrimSpace(string(data)))
-	if val != 8000 { // HIGH brightness
-		t.Errorf("expected 8000, got %d", val)
+	if val != 7000 {
+		t.Errorf("expected 7000, got %d", val)
 	}
 }
 
-func TestOscillationStability(t *testing.T) {
+func TestAdjustSkipsSmallDelta(t *testing.T) {
 	m := newTestManager(t)
-	m.SetCurrentLevel(LevelMid)
+	m.current = 7000
 
-	// Feed alternating values near the mid→high boundary (threshold=40)
-	// and the mid→low boundary (threshold=15)
-	// Values within the dead zone should not cause transitions.
-	values := []int{38, 16, 39, 17, 38, 16}
-	for _, v := range values {
-		if err := m.AdjustBacklight(v); err != nil {
-			t.Fatal(err)
-		}
-		if m.GetCurrentLevel() != LevelMid {
-			t.Fatalf("unexpected transition to %s at illuminance %d", m.GetCurrentLevel(), v)
-		}
-	}
-}
+	// Write a sentinel to detect writes
+	os.WriteFile(m.backlightPath, []byte("99999"), 0644)
 
-func TestClosestLevel(t *testing.T) {
-	m := newTestManager(t)
-
-	tests := []struct {
-		brightness int
-		want       BrightnessLevel
-	}{
-		{1000, LevelVeryLow},
-		{1999, LevelVeryLow}, // below midpoint between 1000 and 3000
-		{2001, LevelLow},     // above midpoint
-		{5500, LevelMid},
-		{10240, LevelVeryHigh},
-		{0, LevelVeryLow},
-		{99999, LevelVeryHigh},
+	// Lux=35 → brightness=7000, delta=0 → should skip
+	if err := m.AdjustBacklight(35); err != nil {
+		t.Fatal(err)
 	}
 
-	for _, tt := range tests {
-		got := m.closestLevel(tt.brightness)
-		if got != tt.want {
-			t.Errorf("closestLevel(%d) = %s, want %s", tt.brightness, got, tt.want)
-		}
-	}
-}
-
-func TestBrightnessLevelString(t *testing.T) {
-	tests := []struct {
-		level BrightnessLevel
-		want  string
-	}{
-		{LevelVeryLow, "VERY_LOW"},
-		{LevelLow, "LOW"},
-		{LevelMid, "MID"},
-		{LevelHigh, "HIGH"},
-		{LevelVeryHigh, "VERY_HIGH"},
-		{BrightnessLevel(99), "UNKNOWN"},
-	}
-
-	for _, tt := range tests {
-		if got := tt.level.String(); got != tt.want {
-			t.Errorf("BrightnessLevel(%d).String() = %q, want %q", tt.level, got, tt.want)
-		}
+	data, _ := os.ReadFile(m.backlightPath)
+	if strings.TrimSpace(string(data)) != "99999" {
+		t.Error("file was written when delta was below threshold")
 	}
 }
