@@ -61,6 +61,14 @@ func (c *Client) SetBacklightValue(ctx context.Context, value int) error {
 	return nil
 }
 
+func (c *Client) SetIlluminanceValue(ctx context.Context, lux float64) error {
+	pipe := c.client.Pipeline()
+	pipe.HSet(ctx, "dashboard", "brightness", fmt.Sprintf("%.2f", lux))
+	pipe.Publish(ctx, "dashboard", "brightness")
+	_, err := pipe.Exec(ctx)
+	return err
+}
+
 func (c *Client) Close() error {
 	return c.client.Close()
 }

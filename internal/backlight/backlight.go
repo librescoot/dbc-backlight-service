@@ -17,7 +17,7 @@ type Point struct {
 }
 
 // ParseCurve parses a curve string of "lux:brightness" pairs.
-// Example: "0.5:100 2:400 5:1200 35:10240"
+// Example: "0.5:1024 2:1500 5:3000 35:10240"
 func ParseCurve(s string) ([]Point, error) {
 	fields := strings.Fields(s)
 	if len(fields) < 2 {
@@ -52,21 +52,29 @@ type Manager struct {
 	logger        *log.Logger
 	backlightPath string
 	curve         []Point
-	current       int // last written brightness value
-	minDelta      int // minimum change to trigger a write
+	output        int     // current brightness written to sysfs
+	target        int     // desired brightness from interpolation
+	smoothedLux   float64 // EMA-filtered lux value
+	luxAlpha      float64 // EMA smoothing factor for lux input (0..1)
+	rampRate      float64 // fraction of remaining distance per tick (0..1)
+	initialized   bool
 }
 
-func New(backlightPath string, logger *log.Logger, curve []Point, minDelta int) *Manager {
+func New(backlightPath string, logger *log.Logger, curve []Point, rampRate float64) *Manager {
 	m := &Manager{
 		logger:        logger,
 		backlightPath: backlightPath,
 		curve:         curve,
-		current:       -1,
-		minDelta:      minDelta,
+		output:        -1,
+		target:        -1,
+		smoothedLux:   -1,
+		luxAlpha:      0.3, // smooth lux input: 30% new, 70% old
+		rampRate:      rampRate,
 	}
 
 	if brightness, err := m.readBrightness(); err == nil {
-		m.current = brightness
+		m.output = brightness
+		m.target = brightness
 		m.logger.Printf("Initialized from hardware brightness %d", brightness)
 	} else {
 		m.logger.Printf("Could not read hardware brightness: %v", err)
@@ -99,24 +107,48 @@ func (m *Manager) Interpolate(lux float64) int {
 	return last.Brightness
 }
 
-// AdjustBacklight computes the target brightness for the given lux value
-// and writes it to the backlight sysfs file if the change exceeds minDelta.
+// AdjustBacklight smooths the lux input, computes a target brightness,
+// then ramps the output towards it.
 func (m *Manager) AdjustBacklight(lux float64) error {
-	target := m.Interpolate(lux)
-
-	delta := target - m.current
-	if delta < 0 {
-		delta = -delta
+	// Smooth the lux input with EMA to reject single-sample spikes
+	if m.smoothedLux < 0 {
+		m.smoothedLux = lux
+	} else {
+		m.smoothedLux = m.luxAlpha*lux + (1-m.luxAlpha)*m.smoothedLux
 	}
 
-	if m.current >= 0 && delta < m.minDelta {
+	m.target = m.Interpolate(m.smoothedLux)
+
+	if !m.initialized {
+		m.output = m.target
+		m.initialized = true
+		m.logger.Printf("lux=%.1f → brightness %d (initial)", lux, m.output)
+		return m.writeBrightness(m.output)
+	}
+
+	if m.target == m.output {
 		return nil
 	}
 
-	m.logger.Printf("lux=%.1f → brightness %d (was %d)", lux, target, m.current)
-	m.current = target
-	return m.writeBrightness(target)
+	// Ramp towards target
+	diff := float64(m.target - m.output)
+	step := int(math.Round(diff * m.rampRate))
+
+	// Always move at least 1 unit towards target
+	if step == 0 {
+		if m.target > m.output {
+			step = 1
+		} else {
+			step = -1
+		}
+	}
+
+	m.output += step
+	return m.writeBrightness(m.output)
 }
+
+func (m *Manager) Target() int  { return m.target }
+func (m *Manager) Output() int  { return m.output }
 
 func (m *Manager) GetCurrentBrightness() (int, error) {
 	return m.readBrightness()
