@@ -13,15 +13,15 @@ import (
 func newTestManager(t *testing.T) *Manager {
 	t.Helper()
 	tmp := t.TempDir() + "/brightness"
-	os.WriteFile(tmp, []byte("9700"), 0644) // MID brightness
+	os.WriteFile(tmp, []byte("5500"), 0644) // MID brightness
 
 	logger := log.New(os.Stderr, "test: ", 0)
 	return New(
 		tmp, logger,
-		9350,  // veryLow
-		9500,  // low
-		9700,  // mid
-		9950,  // high
+		1000,  // veryLow
+		3000,  // low
+		5500,  // mid
+		8000,  // high
 		10240, // veryHigh
 		8,     // veryLow→low
 		18,    // low→mid
@@ -40,13 +40,13 @@ func TestInitialStateFromHardware(t *testing.T) {
 		brightness int
 		want       BrightnessLevel
 	}{
-		{"very low brightness", 9350, LevelVeryLow},
-		{"low brightness", 9500, LevelLow},
-		{"mid brightness", 9700, LevelMid},
-		{"high brightness", 9950, LevelHigh},
+		{"very low brightness", 1000, LevelVeryLow},
+		{"low brightness", 3000, LevelLow},
+		{"mid brightness", 5500, LevelMid},
+		{"high brightness", 8000, LevelHigh},
 		{"very high brightness", 10240, LevelVeryHigh},
-		{"between low and mid", 9600, LevelLow},
-		{"between mid and high", 9800, LevelMid},
+		{"between low and mid", 4000, LevelLow},
+		{"between mid and high", 6500, LevelMid},
 	}
 
 	for _, tt := range tests {
@@ -56,7 +56,7 @@ func TestInitialStateFromHardware(t *testing.T) {
 
 			logger := log.New(os.Stderr, "test: ", 0)
 			m := New(tmp, logger,
-				9350, 9500, 9700, 9950, 10240,
+				1000, 3000, 5500, 8000, 10240,
 				8, 18, 40, 80,
 				5, 15, 35, 70,
 			)
@@ -71,7 +71,7 @@ func TestInitialStateFromHardware(t *testing.T) {
 func TestInitialStateFallback(t *testing.T) {
 	logger := log.New(os.Stderr, "test: ", 0)
 	m := New("/nonexistent/path", logger,
-		9350, 9500, 9700, 9950, 10240,
+		1000, 3000, 5500, 8000, 10240,
 		8, 18, 40, 80,
 		5, 15, 35, 70,
 	)
@@ -192,8 +192,8 @@ func TestFileWriteOnTransition(t *testing.T) {
 
 	data, _ := os.ReadFile(m.backlightPath)
 	val, _ := strconv.Atoi(strings.TrimSpace(string(data)))
-	if val != 9950 { // HIGH brightness
-		t.Errorf("expected 9950, got %d", val)
+	if val != 8000 { // HIGH brightness
+		t.Errorf("expected 8000, got %d", val)
 	}
 }
 
@@ -222,10 +222,10 @@ func TestClosestLevel(t *testing.T) {
 		brightness int
 		want       BrightnessLevel
 	}{
-		{9350, LevelVeryLow},
-		{9425, LevelVeryLow}, // midpoint between 9350 and 9500 → closer to veryLow
-		{9426, LevelLow},     // just past midpoint
-		{9700, LevelMid},
+		{1000, LevelVeryLow},
+		{1999, LevelVeryLow}, // below midpoint between 1000 and 3000
+		{2001, LevelLow},     // above midpoint
+		{5500, LevelMid},
 		{10240, LevelVeryHigh},
 		{0, LevelVeryLow},
 		{99999, LevelVeryHigh},

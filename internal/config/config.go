@@ -40,10 +40,10 @@ func New() *Config {
 	flag.StringVar(&cfg.SysBacklightPath, "backlight-path", "/sys/class/backlight/backlight/brightness", "Path to backlight brightness file")
 
 	// Brightness levels
-	flag.IntVar(&cfg.VeryLowBrightness, "very-low-brightness", 9350, "Brightness value for VERY_LOW state")
-	flag.IntVar(&cfg.LowBrightness, "low-brightness", 9500, "Brightness value for LOW state")
-	flag.IntVar(&cfg.MidBrightness, "mid-brightness", 9700, "Brightness value for MID state")
-	flag.IntVar(&cfg.HighBrightness, "high-brightness", 9950, "Brightness value for HIGH state")
+	flag.IntVar(&cfg.VeryLowBrightness, "very-low-brightness", 1000, "Brightness value for VERY_LOW state")
+	flag.IntVar(&cfg.LowBrightness, "low-brightness", 3000, "Brightness value for LOW state")
+	flag.IntVar(&cfg.MidBrightness, "mid-brightness", 5500, "Brightness value for MID state")
+	flag.IntVar(&cfg.HighBrightness, "high-brightness", 8000, "Brightness value for HIGH state")
 	flag.IntVar(&cfg.VeryHighBrightness, "very-high-brightness", 10240, "Brightness value for VERY_HIGH state")
 
 	// Upward thresholds
