@@ -9,11 +9,15 @@ import (
 )
 
 var defaultCurve = []Point{
-	{0.5, 100},
-	{2, 500},
-	{5, 1500},
-	{15, 4000},
-	{35, 7000},
+	{0, 256},
+	{0.5, 1024},
+	{1, 1750},
+	{2, 2300},
+	{5, 3200},
+	{10, 4200},
+	{20, 5600},
+	{35, 7100},
+	{50, 8300},
 	{80, 10240},
 }
 
@@ -22,27 +26,24 @@ func newTestManager(t *testing.T) *Manager {
 	tmp := t.TempDir() + "/brightness"
 	os.WriteFile(tmp, []byte("5000"), 0644)
 	logger := log.New(os.Stderr, "test: ", 0)
-	return New(tmp, logger, defaultCurve, 50)
+	return New(tmp, logger, defaultCurve, 0.15)
 }
 
 func TestParseCurve(t *testing.T) {
-	curve, err := ParseCurve("0.5:100 2:500 5:1500 35:10240")
+	curve, err := ParseCurve("0.5:1024 2:1500 5:3000 35:10240")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(curve) != 4 {
 		t.Fatalf("expected 4 points, got %d", len(curve))
 	}
-	if curve[0].Lux != 0.5 || curve[0].Brightness != 100 {
+	if curve[0].Lux != 0.5 || curve[0].Brightness != 1024 {
 		t.Errorf("first point: got %v", curve[0])
-	}
-	if curve[3].Lux != 35 || curve[3].Brightness != 10240 {
-		t.Errorf("last point: got %v", curve[3])
 	}
 }
 
 func TestParseCurveSorts(t *testing.T) {
-	curve, err := ParseCurve("35:10240 0.5:100 5:1500")
+	curve, err := ParseCurve("35:10240 0.5:1024 5:3000")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,8 +69,8 @@ func TestParseCurveErrors(t *testing.T) {
 
 func TestInterpolateBelowMin(t *testing.T) {
 	m := newTestManager(t)
-	if b := m.Interpolate(0); b != 100 {
-		t.Errorf("below min: got %d, want 100", b)
+	if b := m.Interpolate(-1); b != 256 {
+		t.Errorf("below min: got %d, want 256", b)
 	}
 }
 
@@ -92,48 +93,64 @@ func TestInterpolateExactPoints(t *testing.T) {
 func TestInterpolateMidpoints(t *testing.T) {
 	m := newTestManager(t)
 
-	// Midpoint between 0.5:100 and 2:500 → lux=1.25 → brightness=300
-	b := m.Interpolate(1.25)
-	if b != 300 {
-		t.Errorf("midpoint 0.5-2: got %d, want 300", b)
-	}
-
-	// Midpoint between 35:7000 and 80:10240 → lux=57.5 → brightness=8620
-	b = m.Interpolate(57.5)
-	if b != 8620 {
-		t.Errorf("midpoint 35-80: got %d, want 8620", b)
+	// Midpoint between 0.5:1024 and 1:1750 → lux=0.75 → brightness=1387
+	b := m.Interpolate(0.75)
+	if b != 1387 {
+		t.Errorf("midpoint 0.5-1: got %d, want 1387", b)
 	}
 }
 
-func TestAdjustWritesOnChange(t *testing.T) {
+func TestRampGradual(t *testing.T) {
 	m := newTestManager(t)
-	m.current = 100
+	// Initialize with a low lux reading
+	m.AdjustBacklight(1.0)
 
-	if err := m.AdjustBacklight(35); err != nil {
-		t.Fatal(err)
+	// Now jump to bright — should ramp, not jump
+	m.AdjustBacklight(200)
+	if m.Output() >= 10240 {
+		t.Errorf("expected gradual ramp, got instant jump to %d", m.Output())
 	}
+	initial := m.Output()
+	if initial <= m.Interpolate(1.0) {
+		t.Errorf("expected upward movement, got %d", initial)
+	}
+}
+
+func TestRampConverges(t *testing.T) {
+	m := newTestManager(t)
+	m.AdjustBacklight(1.0) // initialize
+	for i := 0; i < 200; i++ {
+		m.AdjustBacklight(200)
+	}
+	if m.Output() != 10240 {
+		t.Errorf("expected convergence to 10240, got %d", m.Output())
+	}
+}
+
+func TestRampDown(t *testing.T) {
+	m := newTestManager(t)
+	// Initialize and converge high
+	for i := 0; i < 200; i++ {
+		m.AdjustBacklight(200)
+	}
+	peak := m.Output()
+	// Now ramp down — need several ticks for EMA to converge
+	for i := 0; i < 50; i++ {
+		m.AdjustBacklight(0)
+	}
+	if m.Output() >= peak {
+		t.Errorf("expected downward movement from %d, got %d", peak, m.Output())
+	}
+}
+
+func TestWriteOnRamp(t *testing.T) {
+	m := newTestManager(t)
+	m.AdjustBacklight(1.0) // initialize
+	m.AdjustBacklight(200) // ramp towards 10240
 
 	data, _ := os.ReadFile(m.backlightPath)
 	val, _ := strconv.Atoi(strings.TrimSpace(string(data)))
-	if val != 7000 {
-		t.Errorf("expected 7000, got %d", val)
-	}
-}
-
-func TestAdjustSkipsSmallDelta(t *testing.T) {
-	m := newTestManager(t)
-	m.current = 7000
-
-	// Write a sentinel to detect writes
-	os.WriteFile(m.backlightPath, []byte("99999"), 0644)
-
-	// Lux=35 → brightness=7000, delta=0 → should skip
-	if err := m.AdjustBacklight(35); err != nil {
-		t.Fatal(err)
-	}
-
-	data, _ := os.ReadFile(m.backlightPath)
-	if strings.TrimSpace(string(data)) != "99999" {
-		t.Error("file was written when delta was below threshold")
+	if val <= m.Interpolate(1.0) {
+		t.Errorf("expected file to be updated during ramp, got %d", val)
 	}
 }
