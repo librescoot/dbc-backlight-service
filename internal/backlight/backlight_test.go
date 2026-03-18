@@ -9,15 +9,15 @@ import (
 )
 
 var defaultCurve = []Point{
-	{0, 256},
-	{0.5, 1024},
-	{1, 1750},
-	{2, 2300},
-	{5, 3200},
-	{10, 4200},
-	{20, 5600},
-	{35, 7100},
-	{50, 8300},
+	{0, 400},
+	{0.5, 1300},
+	{1, 2200},
+	{2, 2900},
+	{5, 4000},
+	{10, 5200},
+	{20, 7000},
+	{35, 8600},
+	{50, 9600},
 	{80, 10240},
 }
 
@@ -69,8 +69,8 @@ func TestParseCurveErrors(t *testing.T) {
 
 func TestInterpolateBelowMin(t *testing.T) {
 	m := newTestManager(t)
-	if b := m.Interpolate(-1); b != 256 {
-		t.Errorf("below min: got %d, want 256", b)
+	if b := m.Interpolate(-1); b != 400 {
+		t.Errorf("below min: got %d, want 400", b)
 	}
 }
 
@@ -93,10 +93,10 @@ func TestInterpolateExactPoints(t *testing.T) {
 func TestInterpolateMidpoints(t *testing.T) {
 	m := newTestManager(t)
 
-	// Midpoint between 0.5:1024 and 1:1750 → lux=0.75 → brightness=1387
+	// Midpoint between 0.5:1300 and 1:2200 → lux=0.75 → brightness=1750
 	b := m.Interpolate(0.75)
-	if b != 1387 {
-		t.Errorf("midpoint 0.5-1: got %d, want 1387", b)
+	if b != 1750 {
+		t.Errorf("midpoint 0.5-1: got %d, want 1750", b)
 	}
 }
 
