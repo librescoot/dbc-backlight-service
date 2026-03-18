@@ -49,15 +49,16 @@ func ParseCurve(s string) ([]Point, error) {
 }
 
 type Manager struct {
-	logger        *log.Logger
-	backlightPath string
-	curve         []Point
-	output        int     // current brightness written to sysfs
-	target        int     // desired brightness from interpolation
-	smoothedLux   float64 // EMA-filtered lux value
-	luxAlpha      float64 // EMA smoothing factor for lux input (0..1)
-	rampRate      float64 // fraction of remaining distance per tick (0..1)
-	initialized   bool
+	logger         *log.Logger
+	backlightPath  string
+	curve          []Point
+	output         int     // current brightness written to sysfs
+	target         int     // desired brightness from interpolation
+	smoothedLux    float64 // EMA-filtered lux value
+	luxAlpha       float64 // EMA smoothing factor for lux input (0..1)
+	rampRate       float64 // fraction of remaining distance per tick (0..1)
+	targetDeadband int     // minimum brightness change to update target (anti-flicker)
+	initialized    bool
 }
 
 func New(backlightPath string, logger *log.Logger, curve []Point, rampRate float64) *Manager {
@@ -68,8 +69,9 @@ func New(backlightPath string, logger *log.Logger, curve []Point, rampRate float
 		output:        -1,
 		target:        -1,
 		smoothedLux:   -1,
-		luxAlpha:      0.3, // smooth lux input: 30% new, 70% old
-		rampRate:      rampRate,
+		luxAlpha:       0.4, // smooth lux input: 40% new, 60% old
+		rampRate:       rampRate,
+		targetDeadband: 20, // ignore target changes smaller than this
 	}
 
 	if brightness, err := m.readBrightness(); err == nil {
@@ -117,13 +119,24 @@ func (m *Manager) AdjustBacklight(lux float64) error {
 		m.smoothedLux = m.luxAlpha*lux + (1-m.luxAlpha)*m.smoothedLux
 	}
 
-	m.target = m.Interpolate(m.smoothedLux)
+	newTarget := m.Interpolate(m.smoothedLux)
 
 	if !m.initialized {
-		m.output = m.target
+		m.target = newTarget
+		m.output = newTarget
 		m.initialized = true
 		m.logger.Printf("lux=%.1f → brightness %d (initial)", lux, m.output)
 		return m.writeBrightness(m.output)
+	}
+
+	// Only update target if the change exceeds the deadband to prevent
+	// oscillation from sensor noise at interpolation boundaries.
+	delta := newTarget - m.target
+	if delta < 0 {
+		delta = -delta
+	}
+	if delta > m.targetDeadband {
+		m.target = newTarget
 	}
 
 	if m.target == m.output {
@@ -134,16 +147,13 @@ func (m *Manager) AdjustBacklight(lux float64) error {
 	diff := float64(m.target - m.output)
 	step := int(math.Round(diff * m.rampRate))
 
-	// Always move at least 1 unit towards target
+	// Snap to target when close enough (avoids ±1 jitter at convergence)
 	if step == 0 {
-		if m.target > m.output {
-			step = 1
-		} else {
-			step = -1
-		}
+		m.output = m.target
+	} else {
+		m.output += step
 	}
 
-	m.output += step
 	return m.writeBrightness(m.output)
 }
 
