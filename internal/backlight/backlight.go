@@ -69,9 +69,9 @@ func New(backlightPath string, logger *log.Logger, curve []Point, rampRate float
 		output:        -1,
 		target:        -1,
 		smoothedLux:   -1,
-		luxAlpha:       0.4, // smooth lux input: 40% new, 60% old
+		luxAlpha:       0.2, // smooth lux input: 20% new, 80% old
 		rampRate:       rampRate,
-		targetDeadband: 20, // ignore target changes smaller than this
+		targetDeadband: 150, // ignore target changes smaller than this (anti-flicker)
 	}
 
 	if brightness, err := m.readBrightness(); err == nil {
