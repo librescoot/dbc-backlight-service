@@ -24,6 +24,7 @@ type Service struct {
 	luxPublishMinDelta      float64
 	lastLoggedTarget        int
 	backlightOff            bool
+	overrideCh              chan struct{}
 }
 
 func New(cfg *config.Config, logger *log.Logger, version string) (*Service, error) {
@@ -55,6 +56,7 @@ func New(cfg *config.Config, logger *log.Logger, version string) (*Service, erro
 		lastPublishedLux:        -1,
 		luxPublishMinDelta:      0.5,
 		lastLoggedTarget:        -1,
+		overrideCh:              make(chan struct{}, 1),
 	}
 
 	service.Logger.Printf("dbc-backlight-service %s", version)
@@ -88,12 +90,15 @@ func (s *Service) monitorIlluminance(ctx context.Context) {
 	ticker := time.NewTicker(s.Config.PollingTime)
 	defer ticker.Stop()
 
+	s.checkOverride(ctx)
 	s.adjustBacklight(ctx)
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		case <-s.overrideCh:
+			s.checkOverride(ctx)
 		case <-ticker.C:
 			s.adjustBacklight(ctx)
 		}
@@ -104,8 +109,11 @@ func (s *Service) subscribeOverride(ctx context.Context) {
 	pubsub := s.Redis.Subscribe(ctx, "dashboard")
 	defer pubsub.Close()
 
-	// Check initial state
-	s.checkOverride(ctx)
+	// Signal initial check
+	select {
+	case s.overrideCh <- struct{}{}:
+	default:
+	}
 
 	ch := pubsub.Channel()
 	for {
@@ -114,7 +122,10 @@ func (s *Service) subscribeOverride(ctx context.Context) {
 			return
 		case msg := <-ch:
 			if msg.Payload == "backlight-off" {
-				s.checkOverride(ctx)
+				select {
+				case s.overrideCh <- struct{}{}:
+				default:
+				}
 			}
 		}
 	}
