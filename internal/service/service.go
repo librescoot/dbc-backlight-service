@@ -78,6 +78,7 @@ func (s *Service) Run(ctx context.Context) error {
 	s.Logger.Printf("Using backlight path: %s", s.Config.SysBacklightPath)
 
 	go s.monitorIlluminance(ctx)
+	go s.subscribeOverride(ctx)
 
 	<-ctx.Done()
 	return nil
@@ -87,20 +88,34 @@ func (s *Service) monitorIlluminance(ctx context.Context) {
 	ticker := time.NewTicker(s.Config.PollingTime)
 	defer ticker.Stop()
 
-	overrideTicker := time.NewTicker(3 * time.Second)
-	defer overrideTicker.Stop()
-
-	s.checkOverride(ctx)
 	s.adjustBacklight(ctx)
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-overrideTicker.C:
-			s.checkOverride(ctx)
 		case <-ticker.C:
 			s.adjustBacklight(ctx)
+		}
+	}
+}
+
+func (s *Service) subscribeOverride(ctx context.Context) {
+	pubsub := s.Redis.Subscribe(ctx, "dashboard")
+	defer pubsub.Close()
+
+	// Check initial state
+	s.checkOverride(ctx)
+
+	ch := pubsub.Channel()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case msg := <-ch:
+			if msg.Payload == "backlight-off" {
+				s.checkOverride(ctx)
+			}
 		}
 	}
 }

@@ -80,6 +80,10 @@ func (c *Client) GetBacklightOff(ctx context.Context) (bool, error) {
 	return result == "1", nil
 }
 
+func (c *Client) Subscribe(ctx context.Context, channel string) *redis.PubSub {
+	return c.client.Subscribe(ctx, channel)
+}
+
 func (c *Client) Close() error {
 	return c.client.Close()
 }
