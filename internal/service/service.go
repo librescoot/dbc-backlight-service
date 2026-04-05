@@ -23,6 +23,7 @@ type Service struct {
 	lastPublishedLux        float64
 	luxPublishMinDelta      float64
 	lastLoggedTarget        int
+	backlightOff            bool
 }
 
 func New(cfg *config.Config, logger *log.Logger, version string) (*Service, error) {
@@ -86,12 +87,18 @@ func (s *Service) monitorIlluminance(ctx context.Context) {
 	ticker := time.NewTicker(s.Config.PollingTime)
 	defer ticker.Stop()
 
+	overrideTicker := time.NewTicker(3 * time.Second)
+	defer overrideTicker.Stop()
+
+	s.checkOverride(ctx)
 	s.adjustBacklight(ctx)
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		case <-overrideTicker.C:
+			s.checkOverride(ctx)
 		case <-ticker.C:
 			s.adjustBacklight(ctx)
 		}
@@ -113,7 +120,30 @@ func (s *Service) readSensor() (float64, error) {
 	return strconv.ParseFloat(strings.TrimSpace(string(data)), 64)
 }
 
+func (s *Service) checkOverride(ctx context.Context) {
+	off, err := s.Redis.GetBacklightOff(ctx)
+	if err != nil {
+		s.Logger.Printf("Failed to check backlight-off: %v", err)
+		return
+	}
+	if off && !s.backlightOff {
+		s.backlightOff = true
+		if err := s.Backlight.ForceOff(); err != nil {
+			s.Logger.Printf("Failed to force backlight off: %v", err)
+		} else {
+			s.Logger.Printf("Backlight off (override active)")
+		}
+	} else if !off && s.backlightOff {
+		s.backlightOff = false
+		s.Logger.Printf("Backlight override released, resuming auto-adjustment")
+	}
+}
+
 func (s *Service) adjustBacklight(ctx context.Context) {
+	if s.backlightOff {
+		return
+	}
+
 	lux, err := s.readLux(ctx)
 	if err != nil {
 		s.Logger.Printf("Failed to read illuminance: %v", err)

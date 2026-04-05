@@ -160,6 +160,14 @@ func (m *Manager) AdjustBacklight(lux float64) error {
 func (m *Manager) Target() int  { return m.target }
 func (m *Manager) Output() int  { return m.output }
 
+// ForceOff writes brightness 0 and updates internal state so that
+// resuming normal adjustment ramps smoothly from 0.
+func (m *Manager) ForceOff() error {
+	m.output = 0
+	m.target = 0
+	return m.writeBrightness(0)
+}
+
 func (m *Manager) GetCurrentBrightness() (int, error) {
 	return m.readBrightness()
 }

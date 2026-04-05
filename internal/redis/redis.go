@@ -69,6 +69,17 @@ func (c *Client) SetIlluminanceValue(ctx context.Context, lux float64) error {
 	return err
 }
 
+func (c *Client) GetBacklightOff(ctx context.Context) (bool, error) {
+	result, err := c.client.HGet(ctx, "dashboard", "backlight-off").Result()
+	if err != nil {
+		if err == redis.Nil {
+			return false, nil
+		}
+		return false, err
+	}
+	return result == "1", nil
+}
+
 func (c *Client) Close() error {
 	return c.client.Close()
 }
