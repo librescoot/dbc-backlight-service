@@ -69,15 +69,15 @@ func (c *Client) SetIlluminanceValue(ctx context.Context, lux float64) error {
 	return err
 }
 
-func (c *Client) GetBacklightOff(ctx context.Context) (bool, error) {
-	result, err := c.client.HGet(ctx, "dashboard", "backlight-off").Result()
+func (c *Client) GetBacklightEnabled(ctx context.Context) (bool, error) {
+	result, err := c.client.HGet(ctx, "dashboard", "backlight-enabled").Result()
 	if err != nil {
 		if err == redis.Nil {
-			return false, nil
+			return true, nil // default to enabled when key doesn't exist
 		}
-		return false, err
+		return true, err
 	}
-	return result == "1", nil
+	return result == "true", nil
 }
 
 func (c *Client) Subscribe(ctx context.Context, channel string) *redis.PubSub {

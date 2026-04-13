@@ -23,7 +23,7 @@ type Service struct {
 	lastPublishedLux        float64
 	luxPublishMinDelta      float64
 	lastLoggedTarget        int
-	backlightOff            bool
+	backlightDisabled       bool
 	overrideCh              chan struct{}
 }
 
@@ -121,7 +121,7 @@ func (s *Service) subscribeOverride(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case msg := <-ch:
-			if msg.Payload == "backlight-off" {
+			if msg.Payload == "backlight-enabled" {
 				select {
 				case s.overrideCh <- struct{}{}:
 				default:
@@ -147,26 +147,26 @@ func (s *Service) readSensor() (float64, error) {
 }
 
 func (s *Service) checkOverride(ctx context.Context) {
-	off, err := s.Redis.GetBacklightOff(ctx)
+	enabled, err := s.Redis.GetBacklightEnabled(ctx)
 	if err != nil {
-		s.Logger.Printf("Failed to check backlight-off: %v", err)
+		s.Logger.Printf("Failed to check backlight-enabled: %v", err)
 		return
 	}
-	if off && !s.backlightOff {
-		s.backlightOff = true
+	if !enabled && !s.backlightDisabled {
+		s.backlightDisabled = true
 		if err := s.Backlight.ForceOff(); err != nil {
 			s.Logger.Printf("Failed to force backlight off: %v", err)
 		} else {
-			s.Logger.Printf("Backlight off (override active)")
+			s.Logger.Printf("Backlight disabled")
 		}
-	} else if !off && s.backlightOff {
-		s.backlightOff = false
-		s.Logger.Printf("Backlight override released, resuming auto-adjustment")
+	} else if enabled && s.backlightDisabled {
+		s.backlightDisabled = false
+		s.Logger.Printf("Backlight enabled, resuming auto-adjustment")
 	}
 }
 
 func (s *Service) adjustBacklight(ctx context.Context) {
-	if s.backlightOff {
+	if s.backlightDisabled {
 		return
 	}
 
