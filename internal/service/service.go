@@ -67,10 +67,6 @@ func New(cfg *config.Config, logger *log.Logger, version string) (*Service, erro
 func (s *Service) Run(ctx context.Context) error {
 	defer s.Redis.Close()
 
-	if err := s.Redis.Ping(ctx); err != nil {
-		return fmt.Errorf("redis connection failed: %v", err)
-	}
-
 	mode := "redis"
 	if s.Config.SensorPath != "" {
 		mode = s.Config.SensorPath
