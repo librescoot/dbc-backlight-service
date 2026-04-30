@@ -2,6 +2,8 @@
 
 A Go-based service that adjusts the backlight of the Dashboard Controller based on the value of Redis key `HGET dashboard brightness`. The service writes the configured backlight brightness to `HSET dashboard backlight` in Redis.
 
+Part of the [Librescoot](https://librescoot.org/) open-source platform.
+
 ## Features
 
 - Dynamically adjusts backlight brightness based on ambient light readings
@@ -132,4 +134,11 @@ initial state. If the backlight file cannot be read, it defaults to MID.
 
 ## License
 
-[CC-BY-NC-SA-4.0](LICENSE)
+This project is dual-licensed. The source code is available under the
+[Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International License][cc-by-nc-sa].
+The maintainers reserve the right to grant separate licenses for commercial distribution; please contact the maintainers to discuss commercial licensing.
+
+[![CC BY-NC-SA 4.0][cc-by-nc-sa-image]][cc-by-nc-sa]
+
+[cc-by-nc-sa]: http://creativecommons.org/licenses/by-nc-sa/4.0/
+[cc-by-nc-sa-image]: https://licensebuttons.net/l/by-nc-sa/4.0/88x31.png
