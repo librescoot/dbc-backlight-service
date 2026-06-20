@@ -26,7 +26,7 @@ func newTestManager(t *testing.T) *Manager {
 	tmp := t.TempDir() + "/brightness"
 	os.WriteFile(tmp, []byte("5000"), 0644)
 	logger := log.New(os.Stderr, "test: ", 0)
-	return New(tmp, logger, defaultCurve, 0.15)
+	return New(tmp, logger, defaultCurve, 0.15, 0.2)
 }
 
 func TestParseCurve(t *testing.T) {

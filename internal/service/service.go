@@ -45,6 +45,7 @@ func New(cfg *config.Config, logger *log.Logger, version string) (*Service, erro
 		logger,
 		curve,
 		cfg.RampRate,
+		cfg.LuxAlpha,
 	)
 
 	service := &Service{

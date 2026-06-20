@@ -61,7 +61,7 @@ type Manager struct {
 	initialized    bool
 }
 
-func New(backlightPath string, logger *log.Logger, curve []Point, rampRate float64) *Manager {
+func New(backlightPath string, logger *log.Logger, curve []Point, rampRate, luxAlpha float64) *Manager {
 	m := &Manager{
 		logger:        logger,
 		backlightPath: backlightPath,
@@ -69,7 +69,7 @@ func New(backlightPath string, logger *log.Logger, curve []Point, rampRate float
 		output:        -1,
 		target:        -1,
 		smoothedLux:   -1,
-		luxAlpha:       0.2, // smooth lux input: 20% new, 80% old
+		luxAlpha:       luxAlpha, // smooth lux input via EMA; lower is slower/less flickery
 		rampRate:       rampRate,
 		targetDeadband: 150, // ignore target changes smaller than this (anti-flicker)
 	}
