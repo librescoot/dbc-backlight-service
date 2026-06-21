@@ -147,10 +147,9 @@ func (m *Manager) AdjustBacklight(lux float64) error {
 
 	if !m.initialized {
 		m.target = newTarget
-		m.output = newTarget
 		m.initialized = true
-		m.logger.Printf("lux=%.1f → brightness %d (initial)", lux, m.output)
-		return m.writeBrightness(m.output)
+		m.logger.Printf("lux=%.1f → brightness %d (initial, target)", lux, newTarget)
+		return nil
 	}
 
 	// Only update target if the change exceeds the deadband to prevent
@@ -163,15 +162,18 @@ func (m *Manager) AdjustBacklight(lux float64) error {
 		m.target = newTarget
 	}
 
+	return m.rampToTarget()
+}
+
+// rampToTarget moves output one ramp-step toward target, snapping when close.
+func (m *Manager) rampToTarget() error {
 	if m.target == m.output {
 		return nil
 	}
 
-	// Ramp towards target
 	diff := float64(m.target - m.output)
 	step := int(math.Round(diff * m.rampRate))
 
-	// Snap to target when close enough (avoids ±1 jitter at convergence)
 	if step == 0 {
 		m.output = m.target
 	} else {
@@ -179,6 +181,18 @@ func (m *Manager) AdjustBacklight(lux float64) error {
 	}
 
 	return m.writeBrightness(m.output)
+}
+
+// ApplyManual pins the target to a fixed brightness (manual mode) and ramps
+// output toward it, reusing the same smoothing as auto mode.
+func (m *Manager) ApplyManual(target int) error {
+	if m.output < 0 {
+		m.output = target
+		m.target = target
+		return m.writeBrightness(m.output)
+	}
+	m.target = target
+	return m.rampToTarget()
 }
 
 func (m *Manager) Target() int  { return m.target }

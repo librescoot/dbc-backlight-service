@@ -181,3 +181,36 @@ func TestParseLevelsErrors(t *testing.T) {
 		}
 	}
 }
+
+func TestApplyManualRampsToTarget(t *testing.T) {
+	m := newTestManager(t) // hardware brightness seeded at 5000
+	m.AdjustBacklight(1.0)  // initialize internal state
+
+	// One manual step toward 10240 should move up but not jump there.
+	m.ApplyManual(10240)
+	if m.Output() >= 10240 {
+		t.Errorf("expected gradual ramp, got instant jump to %d", m.Output())
+	}
+	if m.Output() <= 5000 {
+		t.Errorf("expected upward movement from 5000, got %d", m.Output())
+	}
+
+	// Many steps converge exactly on the target.
+	for i := 0; i < 200; i++ {
+		m.ApplyManual(10240)
+	}
+	if m.Output() != 10240 {
+		t.Errorf("expected convergence to 10240, got %d", m.Output())
+	}
+}
+
+func TestApplyManualRampsDown(t *testing.T) {
+	m := newTestManager(t)
+	m.AdjustBacklight(1.0)
+	for i := 0; i < 200; i++ {
+		m.ApplyManual(1300)
+	}
+	if m.Output() != 1300 {
+		t.Errorf("expected convergence to 1300, got %d", m.Output())
+	}
+}
