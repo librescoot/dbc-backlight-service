@@ -80,8 +80,19 @@ func (c *Client) GetBacklightEnabled(ctx context.Context) (bool, error) {
 	return result == "true", nil
 }
 
-func (c *Client) Subscribe(ctx context.Context, channel string) *redis.PubSub {
-	return c.client.Subscribe(ctx, channel)
+func (c *Client) GetBacklightMode(ctx context.Context) (string, error) {
+	result, err := c.client.HGet(ctx, "settings", "dashboard.backlight-mode").Result()
+	if err != nil {
+		if err == redis.Nil {
+			return "auto", nil // default to auto when key doesn't exist
+		}
+		return "auto", err
+	}
+	return result, nil
+}
+
+func (c *Client) Subscribe(ctx context.Context, channels ...string) *redis.PubSub {
+	return c.client.Subscribe(ctx, channels...)
 }
 
 func (c *Client) Close() error {
