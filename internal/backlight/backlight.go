@@ -184,16 +184,16 @@ func (m *Manager) rampToTarget() error {
 	return m.writeBrightness(m.output)
 }
 
-// ApplyManual pins the target to a fixed brightness (manual mode) and ramps
-// output toward it, reusing the same smoothing as auto mode.
+// ApplyManual pins the brightness to a fixed level and applies it immediately.
+// A manual selection is a deliberate user choice, so it snaps rather than
+// ramping (auto mode keeps the smooth ambient ramp via AdjustBacklight).
 func (m *Manager) ApplyManual(target int) error {
-	if m.output < 0 {
-		m.output = target
-		m.target = target
-		return m.writeBrightness(m.output)
-	}
 	m.target = target
-	return m.rampToTarget()
+	if m.output == target {
+		return nil
+	}
+	m.output = target
+	return m.writeBrightness(m.output)
 }
 
 func (m *Manager) Target() int  { return m.target }

@@ -182,33 +182,27 @@ func TestParseLevelsErrors(t *testing.T) {
 	}
 }
 
-func TestApplyManualRampsToTarget(t *testing.T) {
+func TestApplyManualSnapsToTarget(t *testing.T) {
 	m := newTestManager(t) // hardware brightness seeded at 5000
 
-	// One manual step toward 10240 should move up but not jump there.
+	// A manual pick applies immediately, no ramp.
 	m.ApplyManual(10240)
-	if m.Output() >= 10240 {
-		t.Errorf("expected gradual ramp, got instant jump to %d", m.Output())
-	}
-	if m.Output() <= 5000 {
-		t.Errorf("expected upward movement from 5000, got %d", m.Output())
+	if m.Output() != 10240 {
+		t.Errorf("expected immediate snap to 10240, got %d", m.Output())
 	}
 
-	// Many steps converge exactly on the target.
-	for i := 0; i < 200; i++ {
-		m.ApplyManual(10240)
-	}
-	if m.Output() != 10240 {
-		t.Errorf("expected convergence to 10240, got %d", m.Output())
+	// And it writes the new level straight to the backlight file.
+	data, _ := os.ReadFile(m.backlightPath)
+	val, _ := strconv.Atoi(strings.TrimSpace(string(data)))
+	if val != 10240 {
+		t.Errorf("expected backlight file at 10240, got %d", val)
 	}
 }
 
-func TestApplyManualRampsDown(t *testing.T) {
+func TestApplyManualSnapsDown(t *testing.T) {
 	m := newTestManager(t)
-	for i := 0; i < 200; i++ {
-		m.ApplyManual(1300)
-	}
+	m.ApplyManual(1300)
 	if m.Output() != 1300 {
-		t.Errorf("expected convergence to 1300, got %d", m.Output())
+		t.Errorf("expected immediate snap to 1300, got %d", m.Output())
 	}
 }
