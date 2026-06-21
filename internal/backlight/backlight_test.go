@@ -184,7 +184,6 @@ func TestParseLevelsErrors(t *testing.T) {
 
 func TestApplyManualRampsToTarget(t *testing.T) {
 	m := newTestManager(t) // hardware brightness seeded at 5000
-	m.AdjustBacklight(1.0)  // initialize internal state
 
 	// One manual step toward 10240 should move up but not jump there.
 	m.ApplyManual(10240)
@@ -206,7 +205,6 @@ func TestApplyManualRampsToTarget(t *testing.T) {
 
 func TestApplyManualRampsDown(t *testing.T) {
 	m := newTestManager(t)
-	m.AdjustBacklight(1.0)
 	for i := 0; i < 200; i++ {
 		m.ApplyManual(1300)
 	}

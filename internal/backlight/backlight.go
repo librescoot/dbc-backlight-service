@@ -147,9 +147,10 @@ func (m *Manager) AdjustBacklight(lux float64) error {
 
 	if !m.initialized {
 		m.target = newTarget
+		m.output = newTarget
 		m.initialized = true
-		m.logger.Printf("lux=%.1f → brightness %d (initial, target)", lux, newTarget)
-		return nil
+		m.logger.Printf("lux=%.1f → brightness %d (initial)", lux, m.output)
+		return m.writeBrightness(m.output)
 	}
 
 	// Only update target if the change exceeds the deadband to prevent
