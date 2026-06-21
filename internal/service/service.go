@@ -25,6 +25,9 @@ type Service struct {
 	lastLoggedTarget        int
 	backlightDisabled       bool
 	overrideCh              chan struct{}
+	manualLevels            map[string]int
+	backlightMode           string
+	modeCh                  chan struct{}
 }
 
 func New(cfg *config.Config, logger *log.Logger, version string) (*Service, error) {
@@ -36,6 +39,11 @@ func New(cfg *config.Config, logger *log.Logger, version string) (*Service, erro
 	curve, err := backlight.ParseCurve(cfg.Curve)
 	if err != nil {
 		return nil, fmt.Errorf("invalid curve: %v", err)
+	}
+
+	levels, err := backlight.ParseLevels(cfg.ManualLevels)
+	if err != nil {
+		return nil, fmt.Errorf("invalid manual-levels: %v", err)
 	}
 
 	logger.Printf("Backlight curve: %v", curve)
@@ -58,6 +66,9 @@ func New(cfg *config.Config, logger *log.Logger, version string) (*Service, erro
 		luxPublishMinDelta:      0.5,
 		lastLoggedTarget:        -1,
 		overrideCh:              make(chan struct{}, 1),
+		manualLevels:            levels,
+		backlightMode:           "auto",
+		modeCh:                  make(chan struct{}, 1),
 	}
 
 	service.Logger.Printf("dbc-backlight-service %s", version)
@@ -88,6 +99,7 @@ func (s *Service) monitorIlluminance(ctx context.Context) {
 	defer ticker.Stop()
 
 	s.checkOverride(ctx)
+	s.refreshMode(ctx)
 	s.adjustBacklight(ctx)
 
 	for {
@@ -96,6 +108,8 @@ func (s *Service) monitorIlluminance(ctx context.Context) {
 			return
 		case <-s.overrideCh:
 			s.checkOverride(ctx)
+		case <-s.modeCh:
+			s.refreshMode(ctx)
 		case <-ticker.C:
 			s.adjustBacklight(ctx)
 		}
@@ -103,14 +117,12 @@ func (s *Service) monitorIlluminance(ctx context.Context) {
 }
 
 func (s *Service) subscribeOverride(ctx context.Context) {
-	pubsub := s.Redis.Subscribe(ctx, "dashboard")
+	pubsub := s.Redis.Subscribe(ctx, "dashboard", "settings")
 	defer pubsub.Close()
 
-	// Signal initial check
-	select {
-	case s.overrideCh <- struct{}{}:
-	default:
-	}
+	// Signal initial checks
+	s.signal(s.overrideCh)
+	s.signal(s.modeCh)
 
 	ch := pubsub.Channel()
 	for {
@@ -118,13 +130,32 @@ func (s *Service) subscribeOverride(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case msg := <-ch:
-			if msg.Payload == "backlight-enabled" {
-				select {
-				case s.overrideCh <- struct{}{}:
-				default:
-				}
+			switch msg.Payload {
+			case "backlight-enabled":
+				s.signal(s.overrideCh)
+			case "dashboard.backlight-mode":
+				s.signal(s.modeCh)
 			}
 		}
+	}
+}
+
+func (s *Service) signal(ch chan struct{}) {
+	select {
+	case ch <- struct{}{}:
+	default:
+	}
+}
+
+func (s *Service) refreshMode(ctx context.Context) {
+	mode, err := s.Redis.GetBacklightMode(ctx)
+	if err != nil {
+		s.Logger.Printf("Failed to read backlight mode: %v", err)
+		return
+	}
+	if mode != s.backlightMode {
+		s.backlightMode = mode
+		s.Logger.Printf("Backlight mode: %s", mode)
 	}
 }
 
@@ -173,9 +204,16 @@ func (s *Service) adjustBacklight(ctx context.Context) {
 		return
 	}
 
-	if err := s.Backlight.AdjustBacklight(lux); err != nil {
-		s.Logger.Printf("Failed to adjust backlight: %v", err)
-		return
+	if level, manual := s.manualLevels[s.backlightMode]; manual {
+		if err := s.Backlight.ApplyManual(level); err != nil {
+			s.Logger.Printf("Failed to set manual backlight: %v", err)
+			return
+		}
+	} else {
+		if err := s.Backlight.AdjustBacklight(lux); err != nil {
+			s.Logger.Printf("Failed to adjust backlight: %v", err)
+			return
+		}
 	}
 
 	if s.Config.Debug {
@@ -185,7 +223,7 @@ func (s *Service) adjustBacklight(ctx context.Context) {
 			delta = -delta
 		}
 		if delta >= 100 || s.lastLoggedTarget < 0 {
-			s.Logger.Printf("lux=%.1f → target %d (output %d)", lux, target, s.Backlight.Output())
+			s.Logger.Printf("lux=%.1f mode=%s -> target %d (output %d)", lux, s.backlightMode, target, s.Backlight.Output())
 			s.lastLoggedTarget = target
 		}
 	}
