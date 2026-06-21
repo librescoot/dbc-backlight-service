@@ -154,3 +154,30 @@ func TestWriteOnRamp(t *testing.T) {
 		t.Errorf("expected file to be updated during ramp, got %d", val)
 	}
 }
+
+func TestParseLevels(t *testing.T) {
+	levels, err := ParseLevels("low:1300 medium:4000 high:10240")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(levels) != 3 {
+		t.Fatalf("expected 3 levels, got %d", len(levels))
+	}
+	if levels["low"] != 1300 || levels["medium"] != 4000 || levels["high"] != 10240 {
+		t.Errorf("unexpected levels: %v", levels)
+	}
+}
+
+func TestParseLevelsErrors(t *testing.T) {
+	tests := []string{
+		"",
+		"low",
+		"low:bad",
+		"nocolon 2:200",
+	}
+	for _, s := range tests {
+		if _, err := ParseLevels(s); err == nil {
+			t.Errorf("expected error for %q", s)
+		}
+	}
+}

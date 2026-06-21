@@ -48,6 +48,30 @@ func ParseCurve(s string) ([]Point, error) {
 	return points, nil
 }
 
+// ParseLevels parses a manual level map of "name:brightness" pairs.
+// Example: "low:1300 medium:4000 high:10240"
+func ParseLevels(s string) (map[string]int, error) {
+	fields := strings.Fields(s)
+	if len(fields) == 0 {
+		return nil, fmt.Errorf("levels must have at least one entry")
+	}
+
+	levels := make(map[string]int, len(fields))
+	for _, f := range fields {
+		parts := strings.SplitN(f, ":", 2)
+		if len(parts) != 2 {
+			return nil, fmt.Errorf("invalid level %q (expected name:brightness)", f)
+		}
+		brightness, err := strconv.Atoi(parts[1])
+		if err != nil {
+			return nil, fmt.Errorf("invalid brightness value %q: %v", parts[1], err)
+		}
+		levels[parts[0]] = brightness
+	}
+
+	return levels, nil
+}
+
 type Manager struct {
 	logger         *log.Logger
 	backlightPath  string
