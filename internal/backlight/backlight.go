@@ -87,12 +87,12 @@ type Manager struct {
 
 func New(backlightPath string, logger *log.Logger, curve []Point, rampRate, luxAlpha float64) *Manager {
 	m := &Manager{
-		logger:        logger,
-		backlightPath: backlightPath,
-		curve:         curve,
-		output:        -1,
-		target:        -1,
-		smoothedLux:   -1,
+		logger:         logger,
+		backlightPath:  backlightPath,
+		curve:          curve,
+		output:         -1,
+		target:         -1,
+		smoothedLux:    -1,
 		luxAlpha:       luxAlpha, // smooth lux input via EMA; lower is slower/less flickery
 		rampRate:       rampRate,
 		targetDeadband: 150, // ignore target changes smaller than this (anti-flicker)
@@ -196,8 +196,8 @@ func (m *Manager) ApplyManual(target int) error {
 	return m.writeBrightness(m.output)
 }
 
-func (m *Manager) Target() int  { return m.target }
-func (m *Manager) Output() int  { return m.output }
+func (m *Manager) Target() int { return m.target }
+func (m *Manager) Output() int { return m.output }
 
 // ForceOff writes brightness 0 and updates internal state so that
 // resuming normal adjustment ramps smoothly from 0.
