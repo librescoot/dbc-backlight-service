@@ -7,6 +7,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/librescoot/dbc-backlight-service/internal/backlight"
@@ -23,7 +24,7 @@ type Service struct {
 	lastPublishedLux        float64
 	luxPublishMinDelta      float64
 	lastLoggedTarget        int
-	backlightDisabled       bool
+	backlightDisabled       atomic.Bool
 	overrideCh              chan struct{}
 	manualLevels            map[string]int
 	backlightMode           string
@@ -79,28 +80,31 @@ func New(cfg *config.Config, logger *log.Logger, version string) (*Service, erro
 func (s *Service) Run(ctx context.Context) error {
 	defer s.Redis.Close()
 
-	mode := "redis"
+	source := "redis"
 	if s.Config.SensorPath != "" {
-		mode = s.Config.SensorPath
+		source = s.Config.SensorPath
 	}
-	s.Logger.Printf("Starting backlight service (poll=%v, ramp=%.0f%%, source=%s)",
-		s.Config.PollingTime, s.Config.RampRate*100, mode)
+	s.Logger.Printf("Starting backlight service (ramp=%v/%.0f%%, sensor=%v, source=%s)",
+		s.Config.PollingTime, s.Config.RampRate*100, s.Config.SensorInterval, source)
 	s.Logger.Printf("Using backlight path: %s", s.Config.SysBacklightPath)
 
-	go s.monitorIlluminance(ctx)
+	go s.rampLoop(ctx)
+	go s.sensorLoop(ctx)
 	go s.subscribeOverride(ctx)
 
 	<-ctx.Done()
 	return nil
 }
 
-func (s *Service) monitorIlluminance(ctx context.Context) {
+// rampLoop advances the brightness ramp. Every step is a cheap in-memory
+// calculation plus at most one small sysfs write, so it can run at the
+// configured tick rate without the sensor holding it up.
+func (s *Service) rampLoop(ctx context.Context) {
 	ticker := time.NewTicker(s.Config.PollingTime)
 	defer ticker.Stop()
 
 	s.checkOverride(ctx)
 	s.refreshMode(ctx)
-	s.adjustBacklight(ctx)
 
 	for {
 		select {
@@ -111,7 +115,41 @@ func (s *Service) monitorIlluminance(ctx context.Context) {
 		case <-s.modeCh:
 			s.refreshMode(ctx)
 		case <-ticker.C:
-			s.adjustBacklight(ctx)
+			if s.backlightDisabled.Load() {
+				continue
+			}
+			if err := s.Backlight.Tick(); err != nil {
+				s.Logger.Printf("Failed to write backlight: %v", err)
+			}
+		}
+	}
+}
+
+// sensorLoop samples ambient light at the rate the hardware can sustain. The
+// OPT3001 has no data-ready interrupt wired on the DBC, so a read blocks for
+// the whole integration time (~1s at the 0.8s setting the unit file selects).
+// SensorInterval is therefore a floor, not a guarantee.
+func (s *Service) sensorLoop(ctx context.Context) {
+	for {
+		start := time.Now()
+
+		lux, err := s.readLux(ctx)
+		if err != nil {
+			s.Logger.Printf("Failed to read illuminance: %v", err)
+		} else {
+			s.Backlight.SetLux(lux)
+			s.publish(ctx, lux)
+		}
+
+		// Pace to SensorInterval, minus however long the read already took.
+		wait := s.Config.SensorInterval - time.Since(start)
+		if wait <= 0 {
+			wait = time.Millisecond
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(wait):
 		}
 	}
 }
@@ -153,10 +191,19 @@ func (s *Service) refreshMode(ctx context.Context) {
 		s.Logger.Printf("Failed to read backlight mode: %v", err)
 		return
 	}
-	if mode != s.backlightMode {
-		s.backlightMode = mode
-		s.Logger.Printf("Backlight mode: %s", mode)
+	if mode == s.backlightMode {
+		return
 	}
+	s.backlightMode = mode
+	s.Logger.Printf("Backlight mode: %s", mode)
+
+	if level, manual := s.manualLevels[mode]; manual {
+		if err := s.Backlight.SetManual(level); err != nil {
+			s.Logger.Printf("Failed to set manual backlight: %v", err)
+		}
+		return
+	}
+	s.Backlight.SetAuto()
 }
 
 func (s *Service) readLux(ctx context.Context) (float64, error) {
@@ -180,42 +227,24 @@ func (s *Service) checkOverride(ctx context.Context) {
 		s.Logger.Printf("Failed to check backlight-enabled: %v", err)
 		return
 	}
-	if !enabled && !s.backlightDisabled {
-		s.backlightDisabled = true
+	if !enabled && !s.backlightDisabled.Load() {
+		s.backlightDisabled.Store(true)
 		if err := s.Backlight.ForceOff(); err != nil {
 			s.Logger.Printf("Failed to force backlight off: %v", err)
 		} else {
 			s.Logger.Printf("Backlight disabled")
 		}
-	} else if enabled && s.backlightDisabled {
-		s.backlightDisabled = false
+	} else if enabled && s.backlightDisabled.Load() {
+		s.backlightDisabled.Store(false)
 		s.Logger.Printf("Backlight enabled, resuming auto-adjustment")
 	}
 }
 
-func (s *Service) adjustBacklight(ctx context.Context) {
-	if s.backlightDisabled {
-		return
-	}
-
-	lux, err := s.readLux(ctx)
-	if err != nil {
-		s.Logger.Printf("Failed to read illuminance: %v", err)
-		return
-	}
-
-	if level, manual := s.manualLevels[s.backlightMode]; manual {
-		if err := s.Backlight.ApplyManual(level); err != nil {
-			s.Logger.Printf("Failed to set manual backlight: %v", err)
-			return
-		}
-	} else {
-		if err := s.Backlight.AdjustBacklight(lux); err != nil {
-			s.Logger.Printf("Failed to adjust backlight: %v", err)
-			return
-		}
-	}
-
+// publish mirrors the sample and the resulting brightness into Redis. Both are
+// rate-limited by magnitude; scootui-qt drives the auto light/dark theme off
+// the lux field, so it keeps flowing even while the backlight is overridden
+// off and even in a manual backlight mode.
+func (s *Service) publish(ctx context.Context, lux float64) {
 	if s.Config.Debug {
 		target := s.Backlight.Target()
 		delta := target - s.lastLoggedTarget
@@ -242,14 +271,17 @@ func (s *Service) adjustBacklight(ctx context.Context) {
 		}
 	}
 
-	// Publish backlight to Redis
+	// Publish backlight to Redis. The settled value always gets published, so
+	// the last word is the level actually on screen rather than whatever the
+	// ramp happened to be passing through.
 	brightness := s.Backlight.Output()
 	bDelta := brightness - s.lastPublishedBrightness
 	if bDelta < 0 {
 		bDelta = -bDelta
 	}
+	settled := brightness == s.Backlight.Target() && brightness != s.lastPublishedBrightness
 
-	if bDelta >= 100 || s.lastPublishedBrightness == -1 {
+	if bDelta >= 100 || settled || s.lastPublishedBrightness == -1 {
 		if err := s.Redis.SetBacklightValue(ctx, brightness); err != nil {
 			s.Logger.Printf("Warning: Failed to write backlight value to Redis: %v", err)
 		} else {

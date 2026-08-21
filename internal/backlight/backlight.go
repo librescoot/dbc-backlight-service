@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 // Point represents a lux→brightness mapping on the interpolation curve.
@@ -72,16 +73,22 @@ func ParseLevels(s string) (map[string]int, error) {
 	return levels, nil
 }
 
+// Manager owns the lux->brightness state. SetLux runs on the sensor goroutine
+// (roughly 1 Hz, paced by the blocking sysfs read) and Tick runs on the ramp
+// goroutine (tens of Hz), so every field below is guarded by mu.
 type Manager struct {
 	logger         *log.Logger
 	backlightPath  string
 	curve          []Point
-	output         int     // current brightness written to sysfs
+	mu             sync.Mutex
+	output         int     // brightness the ramp has reached
+	written        int     // last value actually written to sysfs
 	target         int     // desired brightness from interpolation
 	smoothedLux    float64 // EMA-filtered lux value
-	luxAlpha       float64 // EMA smoothing factor for lux input (0..1)
-	rampRate       float64 // fraction of remaining distance per tick (0..1)
+	luxAlpha       float64 // EMA smoothing factor per sample (0..1)
+	rampRate       float64 // fraction of remaining distance per ramp tick (0..1)
 	targetDeadband int     // minimum brightness change to update target (anti-flicker)
+	manual         bool    // fixed level selected; ambient light is ignored
 	initialized    bool
 }
 
@@ -91,6 +98,7 @@ func New(backlightPath string, logger *log.Logger, curve []Point, rampRate, luxA
 		backlightPath:  backlightPath,
 		curve:          curve,
 		output:         -1,
+		written:        -1,
 		target:         -1,
 		smoothedLux:    -1,
 		luxAlpha:       luxAlpha, // smooth lux input via EMA; lower is slower/less flickery
@@ -100,6 +108,7 @@ func New(backlightPath string, logger *log.Logger, curve []Point, rampRate, luxA
 
 	if brightness, err := m.readBrightness(); err == nil {
 		m.output = brightness
+		m.written = brightness
 		m.target = brightness
 		m.logger.Printf("Initialized from hardware brightness %d", brightness)
 	} else {
@@ -133,14 +142,22 @@ func (m *Manager) Interpolate(lux float64) int {
 	return last.Brightness
 }
 
-// AdjustBacklight smooths the lux input, computes a target brightness,
-// then ramps the output towards it.
-func (m *Manager) AdjustBacklight(lux float64) error {
+// SetLux feeds one ambient light sample in. It smooths the input and moves the
+// target, but never touches the hardware: Tick does that. Called from the
+// sensor goroutine at whatever rate the hardware can actually deliver.
+func (m *Manager) SetLux(lux float64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	// Smooth the lux input with EMA to reject single-sample spikes
 	if m.smoothedLux < 0 {
 		m.smoothedLux = lux
 	} else {
 		m.smoothedLux = m.luxAlpha*lux + (1-m.luxAlpha)*m.smoothedLux
+	}
+
+	if m.manual {
+		return // keep the EMA warm for the switch back to auto, but don't steer
 	}
 
 	newTarget := m.Interpolate(m.smoothedLux)
@@ -149,8 +166,8 @@ func (m *Manager) AdjustBacklight(lux float64) error {
 		m.target = newTarget
 		m.output = newTarget
 		m.initialized = true
-		m.logger.Printf("lux=%.1f → brightness %d (initial)", lux, m.output)
-		return m.writeBrightness(m.output)
+		m.logger.Printf("lux=%.1f -> brightness %d (initial)", lux, m.output)
+		return
 	}
 
 	// Only update target if the change exceeds the deadband to prevent
@@ -162,49 +179,114 @@ func (m *Manager) AdjustBacklight(lux float64) error {
 	if delta > m.targetDeadband {
 		m.target = newTarget
 	}
-
-	return m.rampToTarget()
 }
 
-// rampToTarget moves output one ramp-step toward target, snapping when close.
-func (m *Manager) rampToTarget() error {
-	if m.target == m.output {
+// Tick moves the output one ramp-step toward the target and writes it if it
+// moved. Cheap and non-blocking, so it can run far faster than the sensor.
+func (m *Manager) Tick() error {
+	m.mu.Lock()
+	if m.output != m.target {
+		diff := float64(m.target - m.output)
+		step := int(math.Round(diff * m.rampRate))
+		if step == 0 {
+			m.output = m.target
+		} else {
+			m.output += step
+		}
+	}
+	out, written := m.output, m.written
+	m.mu.Unlock()
+
+	if out == written {
 		return nil
 	}
-
-	diff := float64(m.target - m.output)
-	step := int(math.Round(diff * m.rampRate))
-
-	if step == 0 {
-		m.output = m.target
-	} else {
-		m.output += step
+	if err := m.writeBrightness(out); err != nil {
+		return err
 	}
 
-	return m.writeBrightness(m.output)
+	m.mu.Lock()
+	m.written = out
+	m.mu.Unlock()
+	return nil
 }
 
-// ApplyManual pins the brightness to a fixed level and applies it immediately.
+// AdjustBacklight feeds a sample in and immediately ramps one step. Only the
+// Redis-sourced path uses it, where reads are cheap and there is no reason to
+// split the two across goroutines.
+func (m *Manager) AdjustBacklight(lux float64) error {
+	m.SetLux(lux)
+	return m.Tick()
+}
+
+// SetManual pins the brightness to a fixed level and applies it immediately.
 // A manual selection is a deliberate user choice, so it snaps rather than
-// ramping (auto mode keeps the smooth ambient ramp via AdjustBacklight).
-func (m *Manager) ApplyManual(target int) error {
-	m.target = target
-	if m.output == target {
+// ramping (auto mode keeps the smooth ambient ramp via SetLux/Tick).
+func (m *Manager) SetManual(level int) error {
+	m.mu.Lock()
+	m.manual = true
+	m.target = level
+	m.output = level
+	needsWrite := m.written != level
+	m.mu.Unlock()
+
+	if !needsWrite {
 		return nil
 	}
-	m.output = target
-	return m.writeBrightness(m.output)
+	if err := m.writeBrightness(level); err != nil {
+		return err
+	}
+
+	m.mu.Lock()
+	m.written = level
+	m.mu.Unlock()
+	return nil
 }
 
-func (m *Manager) Target() int { return m.target }
-func (m *Manager) Output() int { return m.output }
+// SetAuto hands control back to the ambient light curve. The output ramps from
+// wherever the manual level left it rather than jumping.
+func (m *Manager) SetAuto() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.manual = false
+	if m.smoothedLux >= 0 {
+		// Re-derive the target now instead of waiting up to a full sensor
+		// interval for the next sample.
+		m.target = m.Interpolate(m.smoothedLux)
+		m.initialized = true
+	}
+}
 
-// ForceOff writes brightness 0 and updates internal state so that
-// resuming normal adjustment ramps smoothly from 0.
+func (m *Manager) Target() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.target
+}
+
+func (m *Manager) Output() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.output
+}
+
+// ForceOff writes brightness 0 for an external override. It clears initialized
+// so that re-enabling snaps back to the ambient level the way a cold start
+// does: ramping up from 0 at rampRate takes well over a minute, which reads as
+// a broken display rather than a smooth fade.
 func (m *Manager) ForceOff() error {
+	m.mu.Lock()
 	m.output = 0
 	m.target = 0
-	return m.writeBrightness(0)
+	m.initialized = false
+	m.mu.Unlock()
+
+	if err := m.writeBrightness(0); err != nil {
+		return err
+	}
+
+	m.mu.Lock()
+	m.written = 0
+	m.mu.Unlock()
+	return nil
 }
 
 func (m *Manager) GetCurrentBrightness() (int, error) {

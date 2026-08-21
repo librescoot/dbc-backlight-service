@@ -182,11 +182,11 @@ func TestParseLevelsErrors(t *testing.T) {
 	}
 }
 
-func TestApplyManualSnapsToTarget(t *testing.T) {
+func TestSetManualSnapsToTarget(t *testing.T) {
 	m := newTestManager(t) // hardware brightness seeded at 5000
 
 	// A manual pick applies immediately, no ramp.
-	m.ApplyManual(10240)
+	m.SetManual(10240)
 	if m.Output() != 10240 {
 		t.Errorf("expected immediate snap to 10240, got %d", m.Output())
 	}
@@ -199,10 +199,141 @@ func TestApplyManualSnapsToTarget(t *testing.T) {
 	}
 }
 
-func TestApplyManualSnapsDown(t *testing.T) {
+func TestSetManualSnapsDown(t *testing.T) {
 	m := newTestManager(t)
-	m.ApplyManual(1300)
+	m.SetManual(1300)
 	if m.Output() != 1300 {
 		t.Errorf("expected immediate snap to 1300, got %d", m.Output())
 	}
+}
+
+func TestSetLuxDoesNotTouchHardware(t *testing.T) {
+	m := newTestManager(t)
+	m.AdjustBacklight(1.0) // initialize and write
+
+	before, _ := os.ReadFile(m.backlightPath)
+	m.SetLux(200) // moves the target only
+	after, _ := os.ReadFile(m.backlightPath)
+
+	if string(before) != string(after) {
+		t.Errorf("SetLux wrote to sysfs: %q -> %q", before, after)
+	}
+	if m.Target() == m.Output() {
+		t.Error("expected SetLux to move the target away from the output")
+	}
+}
+
+func TestTickRampsWithoutNewSamples(t *testing.T) {
+	m := newTestManager(t)
+	m.AdjustBacklight(1.0)
+	m.SetLux(200)
+
+	// The ramp must make progress on ticks alone; that is the whole point of
+	// running it faster than the ~1 Hz sensor.
+	start := m.Output()
+	for i := 0; i < 5; i++ {
+		if err := m.Tick(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if m.Output() <= start {
+		t.Errorf("expected ramp progress from %d, got %d", start, m.Output())
+	}
+
+	for i := 0; i < 300; i++ {
+		m.Tick()
+	}
+	if m.Output() != m.Target() {
+		t.Errorf("expected convergence to %d, got %d", m.Target(), m.Output())
+	}
+}
+
+func TestForceOffThenResumeSnaps(t *testing.T) {
+	m := newTestManager(t)
+	for i := 0; i < 200; i++ {
+		m.AdjustBacklight(200) // settle at full brightness
+	}
+	full := m.Output()
+
+	if err := m.ForceOff(); err != nil {
+		t.Fatal(err)
+	}
+	if m.Output() != 0 {
+		t.Fatalf("expected 0 after ForceOff, got %d", m.Output())
+	}
+
+	// Resuming must snap back, not crawl up at rampRate: at 5% of the
+	// remaining distance per step that would take well over a hundred steps.
+	m.SetLux(200)
+	if err := m.Tick(); err != nil {
+		t.Fatal(err)
+	}
+	if m.Output() != full {
+		t.Errorf("expected snap back to %d after re-enable, got %d", full, m.Output())
+	}
+
+	data, _ := os.ReadFile(m.backlightPath)
+	val, _ := strconv.Atoi(strings.TrimSpace(string(data)))
+	if val != full {
+		t.Errorf("expected sysfs at %d, got %d", full, val)
+	}
+}
+
+func TestManualIgnoresAmbient(t *testing.T) {
+	m := newTestManager(t)
+	m.AdjustBacklight(200) // settle bright
+
+	if err := m.SetManual(1300); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 50; i++ {
+		m.SetLux(200) // full daylight
+		m.Tick()
+	}
+	if m.Output() != 1300 {
+		t.Errorf("manual level drifted to %d, want 1300", m.Output())
+	}
+}
+
+func TestSetAutoResumesFromManualLevel(t *testing.T) {
+	m := newTestManager(t)
+	m.AdjustBacklight(200)
+	m.SetManual(1300)
+
+	// Ambient stayed bright throughout, so going back to auto should target
+	// the bright end again and ramp there from the manual level.
+	for i := 0; i < 20; i++ {
+		m.SetLux(200)
+	}
+	m.SetAuto()
+
+	if m.Target() <= 1300 {
+		t.Errorf("expected auto target above the manual level, got %d", m.Target())
+	}
+	if m.Output() != 1300 {
+		t.Errorf("expected output to still be at the manual level, got %d", m.Output())
+	}
+	for i := 0; i < 300; i++ {
+		m.Tick()
+	}
+	if m.Output() != m.Target() {
+		t.Errorf("expected convergence to %d, got %d", m.Target(), m.Output())
+	}
+}
+
+func TestConcurrentSetLuxAndTick(t *testing.T) {
+	m := newTestManager(t)
+	m.AdjustBacklight(1.0)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 500; i++ {
+			m.SetLux(float64(i % 100))
+		}
+	}()
+	for i := 0; i < 500; i++ {
+		m.Tick()
+	}
+	<-done
 }
