@@ -11,15 +11,19 @@ Part of the [Librescoot](https://librescoot.org/) open-source platform.
 The DBC carries a TI OPT3001 ambient light sensor on I2C, exposed through IIO at
 `/sys/bus/iio/devices/iio:device0/in_illuminance_input`. There is no data-ready
 interrupt wired, so the driver sleeps through the whole conversion and a read
-blocks for the integration time: about a second at the 0.8s setting the unit
-file selects.
+blocks for the integration time. The unit file selects the 0.1s setting, which
+measures out at about 170ms per read, or 5.8 Hz. The other option the chip
+offers, 0.8s, drops that to 1 Hz, which is slow enough to alias against things
+the sensor genuinely sees: a tree-lined street at riding speed has a shadow
+period close to one second, and sampling it at 1 Hz produces readings that swing
+across the whole range instead of averaging out.
 
 The service therefore runs two loops.
 
-The sensor loop samples at whatever rate the hardware sustains (roughly 1 Hz),
-smooths the reading with an EMA, maps it through a lux-to-brightness curve, and
-moves the ramp target if the result shifted by more than the deadband. It also
-publishes to Redis.
+The sensor loop samples at whatever rate the hardware sustains, smooths the
+reading with an EMA, maps it through a lux-to-brightness curve, and moves the
+ramp target if the result shifted by more than the deadband. It also publishes
+to Redis.
 
 The ramp loop runs far faster (50ms by default) and does nothing but step the
 output a fraction of the remaining distance toward the target and write it to
@@ -71,7 +75,7 @@ make test
 |---|---|---|
 | `--redis-url` | `redis://192.168.7.1:6379` | Redis URL |
 | `--sensor-path` | (empty) | IIO illuminance input. Empty reads lux from Redis instead. |
-| `--sensor-interval` | `1s` | Floor on the gap between samples. The blocking read usually exceeds it. |
+| `--sensor-interval` | `100ms` | Floor on the gap between samples. The blocking read usually exceeds it. |
 | `--polling-time` | `50ms` | Interval between ramp steps |
 | `--ramp-rate` | `0.05` | Fraction of the remaining distance per ramp step |
 | `--lux-alpha` | `0.1` | EMA weight applied per lux sample; lower is slower and less flickery |
@@ -92,6 +96,9 @@ Written, each followed by a `PUBLISH` on the owning channel:
 
 - `dashboard[brightness]`, the raw lux sample, when it moves by 0.5 or more
 - `dashboard[backlight]`, the current output, when it moves by 100 or more and once it settles
+
+Both are additionally capped at one update every 250ms, since sensor noise alone
+clears the lux delta on nearly every sample.
 
 The service subscribes to `dashboard` and `settings` and reacts to the
 `backlight-enabled` and `dashboard.backlight-mode` payloads.

@@ -23,7 +23,7 @@ func New() *Config {
 
 	flag.StringVar(&cfg.RedisURL, "redis-url", "redis://192.168.7.1:6379", "Redis URL")
 	flag.DurationVar(&cfg.PollingTime, "polling-time", 50*time.Millisecond, "Interval between backlight ramp steps")
-	flag.DurationVar(&cfg.SensorInterval, "sensor-interval", time.Second, "Minimum interval between ambient light samples. The OPT3001 has no data-ready interrupt on the DBC, so a read blocks for the integration time (~1s at 0.8s) and this acts as a floor.")
+	flag.DurationVar(&cfg.SensorInterval, "sensor-interval", 100*time.Millisecond, "Minimum interval between ambient light samples. The OPT3001 has no data-ready interrupt on the DBC, so a read blocks for the integration time and this only acts as a floor (~170ms/sample at the 0.1s integration the unit file selects).")
 	flag.StringVar(&cfg.SysBacklightPath, "backlight-path", "/sys/class/backlight/backlight/brightness", "Path to backlight brightness file")
 	flag.StringVar(&cfg.SensorPath, "sensor-path", "", "Path to IIO illuminance input (e.g. /sys/bus/iio/devices/iio:device0/in_illuminance_input). If empty, reads from Redis.")
 	flag.StringVar(&cfg.Curve, "curve", "0:400 0.5:1300 1:2200 2:2900 5:4000 10:5200 20:7000 35:8600 50:9600 80:10240", "Lux-to-brightness curve as lux:brightness pairs")

@@ -23,6 +23,8 @@ type Service struct {
 	lastPublishedBrightness int
 	lastPublishedLux        float64
 	luxPublishMinDelta      float64
+	publishMinInterval      time.Duration
+	lastPublishedAt         time.Time
 	lastLoggedTarget        int
 	backlightDisabled       atomic.Bool
 	overrideCh              chan struct{}
@@ -65,6 +67,7 @@ func New(cfg *config.Config, logger *log.Logger, version string) (*Service, erro
 		lastPublishedBrightness: -1,
 		lastPublishedLux:        -1,
 		luxPublishMinDelta:      0.5,
+		publishMinInterval:      250 * time.Millisecond,
 		lastLoggedTarget:        -1,
 		overrideCh:              make(chan struct{}, 1),
 		manualLevels:            levels,
@@ -241,10 +244,17 @@ func (s *Service) checkOverride(ctx context.Context) {
 }
 
 // publish mirrors the sample and the resulting brightness into Redis. Both are
-// rate-limited by magnitude; scootui-qt drives the auto light/dark theme off
-// the lux field, so it keeps flowing even while the backlight is overridden
-// off and even in a manual backlight mode.
+// rate-limited by magnitude, and the pair by time: sensor noise alone clears
+// the lux delta on nearly every sample, so without the interval this would put
+// a write and a publish on the wire at the full sample rate. scootui-qt drives
+// the auto light/dark theme off the lux field, so it keeps flowing even while
+// the backlight is overridden off and even in a manual backlight mode.
 func (s *Service) publish(ctx context.Context, lux float64) {
+	if !s.lastPublishedAt.IsZero() && time.Since(s.lastPublishedAt) < s.publishMinInterval {
+		return
+	}
+	s.lastPublishedAt = time.Now()
+
 	if s.Config.Debug {
 		target := s.Backlight.Target()
 		delta := target - s.lastLoggedTarget
