@@ -256,6 +256,37 @@ func (m *Manager) SetAuto() {
 	}
 }
 
+// ResumeAuto immediately restores the current ambient-derived brightness after
+// an external override. Unlike SetAuto, this intentionally skips the normal
+// ramp: coming back from a forced-off display must not look broken while it
+// slowly climbs from zero.
+func (m *Manager) ResumeAuto() error {
+	m.mu.Lock()
+	m.manual = false
+	if m.smoothedLux < 0 {
+		m.mu.Unlock()
+		return nil
+	}
+	level := m.Interpolate(m.smoothedLux)
+	m.target = level
+	m.output = level
+	m.initialized = true
+	needsWrite := m.written != level
+	m.mu.Unlock()
+
+	if !needsWrite {
+		return nil
+	}
+	if err := m.writeBrightness(level); err != nil {
+		return err
+	}
+
+	m.mu.Lock()
+	m.written = level
+	m.mu.Unlock()
+	return nil
+}
+
 func (m *Manager) Target() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()

@@ -239,8 +239,27 @@ func (s *Service) checkOverride(ctx context.Context) {
 		}
 	} else if enabled && s.backlightDisabled.Load() {
 		s.backlightDisabled.Store(false)
-		s.Logger.Printf("Backlight enabled, resuming auto-adjustment")
+		manual, err := s.restoreBacklight()
+		if err != nil {
+			s.Logger.Printf("Failed to restore backlight: %v", err)
+		} else if manual {
+			s.Logger.Printf("Backlight enabled, restored manual mode: %s", s.backlightMode)
+		} else {
+			s.Logger.Printf("Backlight enabled, resuming auto-adjustment")
+		}
 	}
+}
+
+// restoreBacklight reapplies the configured brightness after an external
+// override. Manual mode must restore its fixed target explicitly because it
+// ignores ambient samples; auto mode also resumes immediately rather than
+// waiting for a ramp from zero.
+func (s *Service) restoreBacklight() (bool, error) {
+	level, manual := s.manualLevels[s.backlightMode]
+	if manual {
+		return true, s.Backlight.SetManual(level)
+	}
+	return false, s.Backlight.ResumeAuto()
 }
 
 // publish mirrors the sample and the resulting brightness into Redis. Both are

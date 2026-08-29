@@ -279,6 +279,31 @@ func TestForceOffThenResumeSnaps(t *testing.T) {
 	}
 }
 
+func TestResumeAutoSnapsToCurrentAmbientLevel(t *testing.T) {
+	m := newTestManager(t)
+	m.SetLux(80)
+	if err := m.Tick(); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.ForceOff(); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := m.ResumeAuto(); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := m.Output(), 10240; got != want {
+		t.Errorf("output = %d, want %d", got, want)
+	}
+	data, err := os.ReadFile(m.backlightPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(string(data)); got != "10240" {
+		t.Errorf("sysfs brightness = %s, want 10240", got)
+	}
+}
+
 func TestManualIgnoresAmbient(t *testing.T) {
 	m := newTestManager(t)
 	m.AdjustBacklight(200) // settle bright
