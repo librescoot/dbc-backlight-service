@@ -1,4 +1,4 @@
-# DBC Backlight Service
+# Librescoot DBC Backlight Service
 
 Adjusts the Dashboard Controller's display backlight from the ambient light
 sensor, and mirrors both the sensor reading and the resulting backlight level
@@ -124,3 +124,5 @@ The maintainers reserve the right to grant separate licenses for commercial dist
 
 [cc-by-nc-sa]: http://creativecommons.org/licenses/by-nc-sa/4.0/
 [cc-by-nc-sa-image]: https://licensebuttons.net/l/by-nc-sa/4.0/88x31.png
+
+Made with ❤️ by the Librescoot community
