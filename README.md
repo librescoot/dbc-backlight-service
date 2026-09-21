@@ -33,10 +33,10 @@ two minutes it would take at the sensor's own rate.
 
 ### Curve
 
-Curve and manual-level values use a normalized 0 to 10240 scale. At startup,
-the service reads the kernel device's `max_brightness` and maps that scale onto
-the actual range, so the same configuration follows device-tree changes. The
-default curve:
+Curve values use a normalized 0 to 10240 scale. Manual levels accept the same
+scale or a whole percentage of it. At startup, the service reads the kernel
+device's `max_brightness` and maps that scale onto the actual range, so the same
+configuration follows device-tree changes. The default curve:
 
 | lux | 0 | 0.5 | 1 | 2 | 5 | 10 | 20 | 35 | 50 | 80 |
 |---|---|---|---|---|---|---|---|---|---|---|
@@ -83,7 +83,7 @@ make test
 | `--backlight-path` | `/sys/class/backlight/backlight/brightness` | sysfs brightness file |
 | `--max-brightness-path` | `/sys/class/backlight/backlight/max_brightness` | sysfs maximum-brightness file |
 | `--curve` | see above | normalized `lux:brightness` pairs, whitespace separated |
-| `--manual-levels` | `low:1300 medium:4000 high:10240` | normalized `name:brightness` pairs for the fixed modes |
+| `--manual-levels` | `low:5% medium:28% high:100%` | normalized or whole-percent `name:brightness` pairs for the fixed modes |
 | `--debug` | false | Log target changes |
 
 ## Redis keys

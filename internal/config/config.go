@@ -29,7 +29,7 @@ func New() *Config {
 	flag.StringVar(&cfg.MaxBrightnessPath, "max-brightness-path", "/sys/class/backlight/backlight/max_brightness", "Path to backlight max_brightness file")
 	flag.StringVar(&cfg.SensorPath, "sensor-path", "", "Path to IIO illuminance input (e.g. /sys/bus/iio/devices/iio:device0/in_illuminance_input). If empty, reads from Redis.")
 	flag.StringVar(&cfg.Curve, "curve", "0:400 0.5:1300 1:2200 2:2900 5:4000 10:5200 20:7000 35:8600 50:9600 80:10240", "Lux-to-brightness curve as lux:brightness pairs on a normalized 0..10240 scale")
-	flag.StringVar(&cfg.ManualLevels, "manual-levels", "low:1300 medium:4000 high:10240", "Manual backlight levels as name:brightness pairs on a normalized 0..10240 scale")
+	flag.StringVar(&cfg.ManualLevels, "manual-levels", "low:5% medium:28% high:100%", "Manual backlight levels as name:brightness pairs; brightness is normalized 0..10240 or a whole percentage")
 	flag.Float64Var(&cfg.RampRate, "ramp-rate", 0.05, "Fraction of remaining distance to move per ramp step (0..1)")
 	flag.Float64Var(&cfg.LuxAlpha, "lux-alpha", 0.1, "EMA smoothing factor applied per lux sample (0..1); lower is slower/less flickery")
 	flag.BoolVar(&cfg.Debug, "debug", false, "Enable debug logging")

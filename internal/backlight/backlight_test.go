@@ -3,6 +3,7 @@ package backlight
 import (
 	"log"
 	"os"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -168,11 +169,25 @@ func TestParseLevels(t *testing.T) {
 	}
 }
 
+func TestParseLevelsPercentages(t *testing.T) {
+	levels, err := ParseLevels("low:5% medium:28% high:100%")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]int{"low": 512, "medium": 2867, "high": 10240}
+	if !reflect.DeepEqual(levels, want) {
+		t.Errorf("ParseLevels() = %v, want %v", levels, want)
+	}
+}
+
 func TestParseLevelsErrors(t *testing.T) {
 	tests := []string{
 		"",
 		"low",
 		"low:bad",
+		"low:%",
+		"low:5.5%",
+		"low:101%",
 		"nocolon 2:200",
 	}
 	for _, s := range tests {

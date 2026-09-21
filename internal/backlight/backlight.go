@@ -50,7 +50,8 @@ func ParseCurve(s string) ([]Point, error) {
 }
 
 // ParseLevels parses a manual level map of "name:brightness" pairs.
-// Example: "low:1300 medium:4000 high:10240"
+// Brightness may be an integer or a whole percentage of the normalized range.
+// Example: "low:5% medium:28% high:100%"
 func ParseLevels(s string) (map[string]int, error) {
 	fields := strings.Fields(s)
 	if len(fields) == 0 {
@@ -63,14 +64,40 @@ func ParseLevels(s string) (map[string]int, error) {
 		if len(parts) != 2 {
 			return nil, fmt.Errorf("invalid level %q (expected name:brightness)", f)
 		}
-		brightness, err := strconv.Atoi(parts[1])
+		brightness, err := parseLevelBrightness(parts[1])
 		if err != nil {
-			return nil, fmt.Errorf("invalid brightness value %q: %v", parts[1], err)
+			return nil, err
 		}
 		levels[parts[0]] = brightness
 	}
 
 	return levels, nil
+}
+
+func parseLevelBrightness(value string) (int, error) {
+	if !strings.HasSuffix(value, "%") {
+		brightness, err := strconv.Atoi(value)
+		if err != nil {
+			return 0, fmt.Errorf("invalid brightness value %q: %v", value, err)
+		}
+		return brightness, nil
+	}
+
+	percent := strings.TrimSuffix(value, "%")
+	if percent == "" {
+		return 0, fmt.Errorf("invalid brightness percentage %q", value)
+	}
+	for _, c := range percent {
+		if c < '0' || c > '9' {
+			return 0, fmt.Errorf("invalid brightness percentage %q", value)
+		}
+	}
+
+	valuePercent, err := strconv.Atoi(percent)
+	if err != nil || valuePercent > 100 {
+		return 0, fmt.Errorf("invalid brightness percentage %q", value)
+	}
+	return (valuePercent*ReferenceMaxBrightness + 50) / 100, nil
 }
 
 // Manager owns the lux->brightness state. SetLux runs on the sensor goroutine
