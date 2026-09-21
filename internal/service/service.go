@@ -49,6 +49,13 @@ func New(cfg *config.Config, logger *log.Logger, version string) (*Service, erro
 		return nil, fmt.Errorf("invalid manual-levels: %v", err)
 	}
 
+	maxBrightness, err := backlight.ReadMaxBrightness(cfg.MaxBrightnessPath)
+	if err != nil {
+		return nil, fmt.Errorf("read backlight range: %w", err)
+	}
+	curve = backlight.ScaleCurve(curve, maxBrightness)
+	levels = backlight.ScaleLevels(levels, maxBrightness)
+	logger.Printf("Backlight range: 0..%d", maxBrightness)
 	logger.Printf("Backlight curve: %v", curve)
 
 	backlightManager := backlight.New(

@@ -8,7 +8,46 @@ import (
 	"testing"
 
 	"github.com/librescoot/dbc-backlight-service/internal/backlight"
+	"github.com/librescoot/dbc-backlight-service/internal/config"
 )
+
+func TestNewScalesNormalizedLevelsToKernelRange(t *testing.T) {
+	dir := t.TempDir()
+	brightnessPath := dir + "/brightness"
+	maxBrightnessPath := dir + "/max_brightness"
+	if err := os.WriteFile(brightnessPath, []byte("0"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(maxBrightnessPath, []byte("32768"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	service, err := New(&config.Config{
+		RedisURL:          "redis://127.0.0.1:6379",
+		SysBacklightPath:  brightnessPath,
+		MaxBrightnessPath: maxBrightnessPath,
+		Curve:             "0:400 80:10240",
+		ManualLevels:      "low:1300 high:10240",
+		RampRate:          0.05,
+		LuxAlpha:          0.1,
+	}, log.New(io.Discard, "", 0), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got := service.Backlight.Interpolate(0); got != 1280 {
+		t.Errorf("minimum curve output = %d, want 1280", got)
+	}
+	if got := service.Backlight.Interpolate(80); got != 32768 {
+		t.Errorf("maximum curve output = %d, want 32768", got)
+	}
+	if got := service.manualLevels["low"]; got != 4160 {
+		t.Errorf("low manual level = %d, want 4160", got)
+	}
+	if got := service.manualLevels["high"]; got != 32768 {
+		t.Errorf("high manual level = %d, want 32768", got)
+	}
+}
 
 func TestRestoreBacklightReappliesManualLevel(t *testing.T) {
 	path := t.TempDir() + "/brightness"

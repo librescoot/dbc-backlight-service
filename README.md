@@ -33,9 +33,10 @@ two minutes it would take at the sensor's own rate.
 
 ### Curve
 
-Brightness runs 0 to 10240, which is the interpolated step count the
-`pwm-backlight` node exposes (`brightness-levels` with `num-interpolated-steps`
-set to 2048), not a raw duty cycle. The default curve:
+Curve and manual-level values use a normalized 0 to 10240 scale. At startup,
+the service reads the kernel device's `max_brightness` and maps that scale onto
+the actual range, so the same configuration follows device-tree changes. The
+default curve:
 
 | lux | 0 | 0.5 | 1 | 2 | 5 | 10 | 20 | 35 | 50 | 80 |
 |---|---|---|---|---|---|---|---|---|---|---|
@@ -80,8 +81,9 @@ make test
 | `--ramp-rate` | `0.05` | Fraction of the remaining distance per ramp step |
 | `--lux-alpha` | `0.1` | EMA weight applied per lux sample; lower is slower and less flickery |
 | `--backlight-path` | `/sys/class/backlight/backlight/brightness` | sysfs brightness file |
-| `--curve` | see above | `lux:brightness` pairs, whitespace separated |
-| `--manual-levels` | `low:1300 medium:4000 high:10240` | `name:brightness` pairs for the fixed modes |
+| `--max-brightness-path` | `/sys/class/backlight/backlight/max_brightness` | sysfs maximum-brightness file |
+| `--curve` | see above | normalized `lux:brightness` pairs, whitespace separated |
+| `--manual-levels` | `low:1300 medium:4000 high:10240` | normalized `name:brightness` pairs for the fixed modes |
 | `--debug` | false | Log target changes |
 
 ## Redis keys
